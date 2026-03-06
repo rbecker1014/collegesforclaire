@@ -7,14 +7,17 @@ import { db } from '../firebase';
 
 export function useNotes(schoolId) {
   const [notes, setNotes] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Start as false when there's no schoolId so callers never see loading=true for nothing
+  const [loading, setLoading] = useState(!!schoolId);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!schoolId) {
+      setNotes([]);
       setLoading(false);
       return;
     }
+    setLoading(true);
     const q = query(
       collection(db, 'schools', schoolId, 'notes'),
       orderBy('createdAt', 'desc')
