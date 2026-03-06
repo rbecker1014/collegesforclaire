@@ -11,7 +11,10 @@ export function useNotes(schoolId) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!schoolId) return;
+    if (!schoolId) {
+      setLoading(false);
+      return;
+    }
     const q = query(
       collection(db, 'schools', schoolId, 'notes'),
       orderBy('createdAt', 'desc')
