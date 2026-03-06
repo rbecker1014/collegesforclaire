@@ -9,9 +9,12 @@ export function useSchool(schoolId) {
 
   useEffect(() => {
     if (!schoolId) {
+      setSchool(null);
       setLoading(false);
       return;
     }
+    setSchool(null);
+    setLoading(true);
     const ref = doc(db, 'schools', schoolId);
     const unsubscribe = onSnapshot(
       ref,
