@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   DEFAULT_SYSTEM, DEFAULT_USER,
   DEFAULT_SEARCH_SYSTEM, DEFAULT_SEARCH_USER,
+  DEFAULT_CHAT_SYSTEM,
   seedDefaultPrompts,
 } from '../data/seedPrompts';
 
@@ -40,6 +41,18 @@ const KNOWN_PROMPTS = [
     testType: 'search',
     systemRows: 4,
     userRows: 8,
+  },
+  {
+    docId: 'chat-assistant',
+    title: 'Chat Assistant',
+    description: 'Used by the AI chatbot when answering Claire\'s questions about her schools',
+    placeholder: '{{schoolData}}, {{currentSchool}}',
+    placeholderNote: '{{schoolData}} and {{currentSchool}} are injected at runtime by the Cloud Function',
+    defaultSystem: DEFAULT_CHAT_SYSTEM,
+    defaultUser: '',
+    testType: 'none',
+    systemRows: 24,
+    userRows: 0,
   },
 ];
 
@@ -367,28 +380,30 @@ function PromptCard({
         <div style={CHAR_COUNT_STYLE}>{systemVal.length.toLocaleString()} characters</div>
       </div>
 
-      {/* User prompt */}
-      <div style={{ marginBottom: '1.75rem' }}>
-        <div style={LABEL_STYLE}>
-          User Prompt Template
-          <InfoIcon tip={placeholderNote} />
+      {/* User prompt (hidden for prompts with no user template) */}
+      {userRows > 0 && (
+        <div style={{ marginBottom: '1.75rem' }}>
+          <div style={LABEL_STYLE}>
+            User Prompt Template
+            <InfoIcon tip={placeholderNote} />
+          </div>
+          <textarea
+            value={userVal}
+            onChange={(e) => setUserVal(e.target.value)}
+            rows={userRows}
+            style={TEXTAREA_STYLE}
+          />
+          <div style={CHAR_COUNT_STYLE}>{userVal.length.toLocaleString()} characters</div>
+          <div style={{
+            marginTop: '0.6rem', padding: '0.5rem 0.85rem',
+            background: 'rgba(232,151,107,0.08)', border: '1px solid rgba(232,151,107,0.2)',
+            borderRadius: '6px', fontFamily: "'DM Sans', sans-serif",
+            fontSize: '0.8rem', color: 'rgba(232,151,107,0.8)',
+          }}>
+            {placeholderNote}
+          </div>
         </div>
-        <textarea
-          value={userVal}
-          onChange={(e) => setUserVal(e.target.value)}
-          rows={userRows}
-          style={TEXTAREA_STYLE}
-        />
-        <div style={CHAR_COUNT_STYLE}>{userVal.length.toLocaleString()} characters</div>
-        <div style={{
-          marginTop: '0.6rem', padding: '0.5rem 0.85rem',
-          background: 'rgba(232,151,107,0.08)', border: '1px solid rgba(232,151,107,0.2)',
-          borderRadius: '6px', fontFamily: "'DM Sans', sans-serif",
-          fontSize: '0.8rem', color: 'rgba(232,151,107,0.8)',
-        }}>
-          {placeholderNote}
-        </div>
-      </div>
+      )}
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
@@ -416,14 +431,16 @@ function PromptCard({
         >
           Reset to Default
         </button>
-        <button
-          onClick={() => { setTestOpen(o => !o); setTestResult(null); setTestError(''); }}
-          style={GHOST_BTN}
-          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.35)'; e.currentTarget.style.color = '#f5f0e8'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = 'rgba(245,240,232,0.7)'; }}
-        >
-          {testOpen ? 'Close Test' : testType === 'profile' ? 'Test with a School' : 'Test Search'}
-        </button>
+        {testType !== 'none' && (
+          <button
+            onClick={() => { setTestOpen(o => !o); setTestResult(null); setTestError(''); }}
+            style={GHOST_BTN}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.35)'; e.currentTarget.style.color = '#f5f0e8'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = 'rgba(245,240,232,0.7)'; }}
+          >
+            {testOpen ? 'Close Test' : testType === 'profile' ? 'Test with a School' : 'Test Search'}
+          </button>
+        )}
       </div>
 
       {/* Reset confirmation */}

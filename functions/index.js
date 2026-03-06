@@ -185,6 +185,163 @@ exports.generateSchoolProfile = onCall(
 );
 
 /**
+ * chatWithClaire
+ *
+ * AI chatbot that answers questions about Claire's college list.
+ * Loads all school data from Firestore, injects into system prompt,
+ * and uses web search for questions the data doesn't cover.
+ * Requires authentication.
+ */
+exports.chatWithClaire = onCall(
+  {
+    region: "us-central1",
+    secrets: ["CLAUDE_API_KEY"],
+    timeoutSeconds: 120,
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in to use this function.");
+    }
+
+    const { message, conversationHistory = [], schoolId } = request.data;
+    if (!message || typeof message !== "string") {
+      throw new HttpsError("invalid-argument", "message is required.");
+    }
+
+    logger.info("chatWithClaire called", { uid: request.auth.uid, schoolId });
+
+    // 1. Fetch all non-archived schools from Firestore
+    const schoolsSnap = await db.collection("schools")
+      .where("archived", "!=", true)
+      .get();
+    const schools = schoolsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.rank || 99) - (b.rank || 99));
+
+    // 2. Build school data context
+    const schoolDataJSON = JSON.stringify(
+      schools.map((s) => ({
+        id: s.id,
+        name: s.name,
+        rank: s.rank,
+        primaryColor: s.primaryColor,
+        overview: s.overview,
+        nursing: s.nursing,
+        campusLife: s.campusLife,
+        claireFit: s.claireFit,
+        video: s.video,
+        customMetrics: s.customMetrics,
+      })),
+      null,
+      2
+    );
+
+    // 3. Determine current school name if schoolId provided
+    let currentSchoolLine = "";
+    if (schoolId) {
+      const currentSchool = schools.find((s) => s.id === schoolId);
+      if (currentSchool) {
+        currentSchoolLine = `\nClaire is currently viewing: ${currentSchool.name} (id: "${schoolId}")`;
+      }
+    }
+
+    // 4. Load system prompt from Firestore or use hardcoded default
+    const DEFAULT_CHAT_SYSTEM = `You are Claire's college research assistant. Claire is a high school student researching nursing programs. You have access to her collected school data and can also search the web for additional information.
+
+CLAIRE'S SCHOOL DATA:
+{{schoolData}}
+{{currentSchool}}
+
+RULES:
+1. When answering questions about schools on Claire's list, ALWAYS use the data provided above first. Cite which school's data you're referencing.
+2. For comparisons between schools on her list, use the collected data to build tables or side-by-side breakdowns.
+3. For questions the data doesn't cover (weather, distance, crime rates, specific program details not in the data, etc.), use web search to find answers.
+4. When you find information that differs from what's in Claire's data, point out the discrepancy and ask if she'd like to update it. Format the suggestion as: [SUGGEST_UPDATE: schoolId="{id}", field="{field.path}", newValue="{value}", source="{source}", sourceUrl="{url}"]
+5. When Claire asks about rankings or preferences, give your honest assessment with reasoning but frame it as a suggestion, not a decision. Format ranking suggestions as: [SUGGEST_RERANK: schoolId1, schoolId2, schoolId3, ...]
+6. Be conversational, warm, and direct. Claire is a teenager — don't be overly formal.
+7. Use specific numbers and data points from her collected data. Don't be vague.
+8. If comparing schools, format as a clean comparison — not walls of text.
+9. Keep responses concise. If Claire wants more detail, she'll ask.`;
+
+    let systemPrompt = DEFAULT_CHAT_SYSTEM;
+    try {
+      const promptDoc = await db.collection("prompts").doc("chat-assistant").get();
+      if (promptDoc.exists) {
+        systemPrompt = promptDoc.data().system || DEFAULT_CHAT_SYSTEM;
+        logger.info("chatWithClaire: using Firestore system prompt");
+      }
+    } catch (promptErr) {
+      logger.warn("chatWithClaire: failed to load Firestore prompt, using default", { error: promptErr.message });
+    }
+
+    // Inject school data
+    systemPrompt = systemPrompt
+      .replace("{{schoolData}}", schoolDataJSON)
+      .replace("{{currentSchool}}", currentSchoolLine);
+
+    // 5. Call Claude with web search
+    const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+    const messages = [
+      ...(conversationHistory || []).slice(-10),
+      { role: "user", content: message },
+    ];
+
+    try {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4000,
+        system: systemPrompt,
+        messages,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      });
+
+      const fullText = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("");
+
+      // 6. Parse [SUGGEST_UPDATE: ...] patterns
+      const suggestedUpdates = [];
+      const updatePattern = /\[SUGGEST_UPDATE:\s*schoolId="([^"]+)",\s*field="([^"]+)",\s*newValue="([^"]+)",\s*source="([^"]*)",\s*sourceUrl="([^"]*)"\]/g;
+      let match;
+      while ((match = updatePattern.exec(fullText)) !== null) {
+        suggestedUpdates.push({
+          schoolId: match[1],
+          field: match[2],
+          newValue: match[3],
+          source: match[4],
+          sourceUrl: match[5],
+        });
+      }
+
+      // 7. Parse [SUGGEST_RERANK: ...] pattern
+      let suggestedRerank = null;
+      const rerankMatch = fullText.match(/\[SUGGEST_RERANK:\s*([^\]]+)\]/);
+      if (rerankMatch) {
+        suggestedRerank = rerankMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
+      }
+
+      // 8. Strip suggestion tags from response text
+      const cleanText = fullText
+        .replace(/\[SUGGEST_UPDATE:[^\]]+\]/g, "")
+        .replace(/\[SUGGEST_RERANK:[^\]]+\]/g, "")
+        .trim();
+
+      logger.info("chatWithClaire response", {
+        textLength: cleanText.length,
+        suggestedUpdates: suggestedUpdates.length,
+        suggestedRerank: suggestedRerank ? suggestedRerank.length : 0,
+      });
+
+      return { response: cleanText, suggestedUpdates, suggestedRerank };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("chatWithClaire failed", { message: err.message });
+      throw new HttpsError("internal", `Chat failed: ${err.message}`);
+    }
+  }
+);
+
+/**
  * generateMetric
  *
  * Accepts { metricName, metricDescription, schoolId } and will call Claude

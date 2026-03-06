@@ -6,6 +6,7 @@ import SchoolProfile from './pages/SchoolProfile';
 import Archive from './pages/Archive';
 import Metrics from './pages/Metrics';
 import PromptEditor from './pages/PromptEditor';
+import ChatPanel from './components/ChatPanel';
 
 function AppRoutes() {
   const { user } = useAuth();
@@ -28,6 +29,7 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <AppRoutes />
+        <ChatPanel />
       </AuthProvider>
     </BrowserRouter>
   );
