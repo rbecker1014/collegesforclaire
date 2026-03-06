@@ -76,6 +76,12 @@ export default function NavBar() {
         >
           Metrics
         </NavLink>
+        <NavLink to="/admin/prompts" style={navLinkStyle}
+          onMouseEnter={e => { if (!e.currentTarget.style.borderBottomColor.includes('E8976B')) e.currentTarget.style.color = '#f5f0e8'; }}
+          onMouseLeave={e => { if (!e.currentTarget.style.borderBottomColor.includes('E8976B')) e.currentTarget.style.color = 'rgba(245,240,232,0.65)'; }}
+        >
+          Prompts
+        </NavLink>
       </div>
 
       {/* Right: user avatar + dropdown */}

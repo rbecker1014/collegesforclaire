@@ -43,8 +43,10 @@ exports.generateSchoolProfile = onCall(
       if (promptDoc.exists) {
         const data = promptDoc.data();
         systemPrompt = data.system;
-        // Allow ${schoolName} placeholder substitution in stored prompts
-        userPrompt = data.user.replace(/\$\{schoolName\}/g, schoolName);
+        // Support both {{schoolName}} (Prompt Editor format) and ${schoolName} (legacy)
+        userPrompt = data.user
+          .replace(/\{\{schoolName\}\}/g, schoolName)
+          .replace(/\$\{schoolName\}/g, schoolName);
         logger.info("Using custom prompts from Firestore");
       } else {
         const prompts = getSchoolProfilePrompt(schoolName);
