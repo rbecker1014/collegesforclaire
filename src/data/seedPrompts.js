@@ -110,11 +110,36 @@ RULES:
 8. If comparing schools, format as a clean comparison — not walls of text.
 9. Keep responses concise. If Claire wants more detail, she'll ask.`;
 
+export const DEFAULT_METRIC_SYSTEM = `You are a research assistant gathering specific data about US universities for college comparison. You will research one metric for a given university and return a JSON object with your findings.
+
+Research the metric thoroughly using web search. Return ONLY valid JSON with no markdown, no backticks, no explanation.
+
+CRITICAL SOURCE REQUIREMENTS:
+- Every data point must include its source.
+- sourceUrl must be a real, valid URL. Do not fabricate URLs.
+- If you cannot find a specific value, set value to "Not available" and source to "Not found".`;
+
+export const DEFAULT_METRIC_USER = `Research the following metric for {{schoolName}}:
+
+Metric: {{metricName}}
+Description: {{metricDescription}}
+
+Return ONLY this JSON object:
+{
+  "value": "The specific value or answer found (be precise — numbers, percentages, rankings, yes/no, etc.)",
+  "source": "Source name (e.g., US News, school website, etc.)",
+  "sourceUrl": "https://real-url.edu",
+  "asOf": "Year or time period (e.g., 2024, Fall 2024)"
+}
+
+Search the web thoroughly. Be specific with the value — don't be vague. Return ONLY the JSON object, nothing else.`;
+
 export async function seedDefaultPrompts(db) {
   const seeds = [
     { id: 'school-profile', system: DEFAULT_SYSTEM, user: DEFAULT_USER },
     { id: 'school-search', system: DEFAULT_SEARCH_SYSTEM, user: DEFAULT_SEARCH_USER },
     { id: 'chat-assistant', system: DEFAULT_CHAT_SYSTEM, user: '' },
+    { id: 'metric-research', system: DEFAULT_METRIC_SYSTEM, user: DEFAULT_METRIC_USER },
   ];
   await Promise.all(seeds.map(async ({ id, system, user }) => {
     const ref = doc(db, 'prompts', id);

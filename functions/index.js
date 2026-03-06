@@ -1,6 +1,6 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
-const { getSchoolProfilePrompt, getMetricPrompt } = require("./prompts");
+const { getSchoolProfilePrompt } = require("./prompts");
 
 const Anthropic = require("@anthropic-ai/sdk");
 const admin = require("firebase-admin");
@@ -344,35 +344,148 @@ RULES:
 /**
  * generateMetric
  *
- * Accepts { metricName, metricDescription, schoolId } and will call Claude
- * to research a specific custom metric for a school.
+ * Accepts { metricId, metricName, metricDescription } and calls Claude (with
+ * web search) to research the metric for every non-archived school, then
+ * batch-writes the results to each school's customMetrics field and to the
+ * top-level metrics collection.
  * Requires authentication.
  */
 exports.generateMetric = onCall(
-  // secrets: ["CLAUDE_API_KEY"] — added when Claude calls are wired up
-  { region: "us-central1" },
+  {
+    region: "us-central1",
+    secrets: ["CLAUDE_API_KEY"],
+    timeoutSeconds: 300,
+  },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in to use this function.");
     }
 
-    const { metricName, metricDescription, schoolId } = request.data;
-    if (!metricName || !schoolId) {
-      throw new HttpsError("invalid-argument", "metricName and schoolId are required.");
+    const { metricName, metricDescription = "", metricId: providedId } = request.data;
+    if (!metricName || typeof metricName !== "string") {
+      throw new HttpsError("invalid-argument", "metricName is required.");
     }
 
-    logger.info("generateMetric called", {
-      uid: request.auth.uid,
+    // Derive a stable metricId slug
+    const metricId = providedId || metricName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+    logger.info("generateMetric called", { uid: request.auth.uid, metricName, metricId });
+
+    // Load prompts from Firestore (fall back to hardcoded defaults)
+    const DEFAULT_METRIC_SYSTEM = "You are a research assistant gathering specific data about US universities for college comparison. You will research one metric for a given university and return a JSON object. Return ONLY valid JSON with no markdown, no backticks, no explanation. If you cannot find a value, set value to \"Not available\" and source to \"Not found\". sourceUrl must be a real, valid URL.";
+    const DEFAULT_METRIC_USER = `Research the following metric for {{schoolName}}:\n\nMetric: {{metricName}}\nDescription: {{metricDescription}}\n\nReturn ONLY this JSON object:\n{\n  "value": "The specific value found",\n  "source": "Source name",\n  "sourceUrl": "https://real-url.edu",\n  "asOf": "Year or time period"\n}\n\nBe specific and precise. Return ONLY the JSON object, nothing else.`;
+
+    let systemPrompt = DEFAULT_METRIC_SYSTEM;
+    let userTemplate = DEFAULT_METRIC_USER;
+    try {
+      const promptDoc = await db.collection("prompts").doc("metric-research").get();
+      if (promptDoc.exists) {
+        const data = promptDoc.data();
+        systemPrompt = data.system || DEFAULT_METRIC_SYSTEM;
+        userTemplate = data.user || DEFAULT_METRIC_USER;
+        logger.info("generateMetric: using Firestore prompts");
+      }
+    } catch (promptErr) {
+      logger.warn("generateMetric: failed to load Firestore prompts", { error: promptErr.message });
+    }
+
+    // Fetch all non-archived schools
+    const schoolsSnap = await db.collection("schools").where("archived", "!=", true).get();
+    const schools = schoolsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    logger.info("generateMetric: researching metric for schools", { count: schools.length, metricId });
+
+    const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+
+    // Research metric for each school with concurrency limit of 3
+    async function researchSchool(school) {
+      const userPrompt = userTemplate
+        .replace(/\{\{schoolName\}\}/g, school.name)
+        .replace(/\{\{metricName\}\}/g, metricName)
+        .replace(/\{\{metricDescription\}\}/g, metricDescription);
+
+      try {
+        const response = await client.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 800,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        });
+
+        const rawText = response.content
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("")
+          .trim();
+
+        // Parse JSON — strip fences, find { ... }
+        const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+        let result;
+        try {
+          const first = stripped.indexOf("{");
+          const last = stripped.lastIndexOf("}");
+          if (first !== -1 && last > first) {
+            result = JSON.parse(stripped.slice(first, last + 1));
+          } else {
+            result = JSON.parse(stripped);
+          }
+        } catch (parseErr) {
+          logger.warn("generateMetric: JSON parse failed for school", { schoolId: school.id, error: parseErr.message, raw: stripped.slice(0, 200) });
+          result = { value: "Not available", source: "Parse error", sourceUrl: "", asOf: "" };
+        }
+
+        return { schoolId: school.id, schoolName: school.name, ...result, name: metricName };
+      } catch (err) {
+        logger.warn("generateMetric: Claude call failed for school", { schoolId: school.id, error: err.message });
+        return { schoolId: school.id, schoolName: school.name, value: "Error", source: err.message, sourceUrl: "", asOf: "", name: metricName };
+      }
+    }
+
+    // Concurrency limiter: process in batches of 3
+    const results = [];
+    for (let i = 0; i < schools.length; i += 3) {
+      const batch = schools.slice(i, i + 3);
+      const batchResults = await Promise.all(batch.map(researchSchool));
+      results.push(...batchResults);
+    }
+
+    // Batch-write results to Firestore
+    const writeBatch = db.batch();
+
+    for (const result of results) {
+      const schoolRef = db.collection("schools").doc(result.schoolId);
+      const metricData = {
+        name: metricName,
+        value: result.value,
+        source: result.source || "",
+        sourceUrl: result.sourceUrl || "",
+        asOf: result.asOf || "",
+        description: metricDescription,
+        researchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      writeBatch.update(schoolRef, { [`customMetrics.${metricId}`]: metricData });
+    }
+
+    // Write metric definition to metrics collection
+    const metricRef = db.collection("metrics").doc(metricId);
+    writeBatch.set(metricRef, {
+      id: metricId,
+      name: metricName,
+      description: metricDescription,
+      lastResearchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      schoolCount: results.length,
+    }, { merge: true });
+
+    await writeBatch.commit();
+
+    logger.info("generateMetric: completed", { metricId, schoolCount: results.length });
+
+    return {
+      success: true,
+      metricId,
       metricName,
-      schoolId,
-    });
-
-    // Build prompts (full implementation in Phase 3)
-    const prompts = getMetricPrompt(schoolId, metricName, metricDescription || "");
-    logger.debug("Prompts built", { system: prompts.system.slice(0, 80) });
-
-    // TODO Phase 3: call Claude API here
-    return { status: "not yet implemented", metricName, schoolId, prompts };
+      results: results.map((r) => ({ schoolId: r.schoolId, schoolName: r.schoolName, value: r.value })),
+    };
   }
 );
 

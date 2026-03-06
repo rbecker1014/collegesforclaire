@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ChevronLeft, Check, X, Pencil } from 'lucide-react';
+import { Link, useParams, useNavigate } from 'react-router-dom';
+import { ChevronLeft, Check, X, Pencil, Archive } from 'lucide-react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
@@ -655,6 +655,122 @@ function YouTubeIcon() {
   );
 }
 
+// ─── Archive modal ─────────────────────────────────────────────────────────────
+
+function ArchiveModal({ school, onClose, onConfirm, archiveReason, setArchiveReason, archiving }) {
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '1rem',
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{
+        background: '#1A1A1A',
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '14px',
+        padding: '1.75rem',
+        maxWidth: '420px',
+        width: '100%',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.75rem' }}>
+          <Archive size={18} color="rgba(235,87,87,0.8)" />
+          <h2 style={{ fontFamily: "'Libre Baskerville', serif", fontSize: '1.1rem', color: '#f5f0e8', margin: 0 }}>
+            Archive {school.name}?
+          </h2>
+        </div>
+        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', color: 'rgba(245,240,232,0.55)', lineHeight: 1.55, margin: '0 0 1.1rem' }}>
+          This school will be moved to the archive. You can restore it anytime from the Archive page.
+        </p>
+        <textarea
+          value={archiveReason}
+          onChange={(e) => setArchiveReason(e.target.value)}
+          placeholder="Reason for archiving (optional)…"
+          rows={3}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            background: '#111111', border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '8px', padding: '10px 12px',
+            color: '#f5f0e8', fontFamily: "'DM Sans', sans-serif",
+            fontSize: '0.875rem', lineHeight: 1.5,
+            resize: 'vertical', outline: 'none',
+          }}
+        />
+        <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end', marginTop: '1.1rem' }}>
+          <button onClick={onClose} style={GHOST_BTN}>Cancel</button>
+          <button
+            onClick={onConfirm}
+            disabled={archiving}
+            style={{
+              background: '#eb5757', color: '#fff', border: 'none',
+              borderRadius: '6px', padding: '0.45rem 1.1rem',
+              fontFamily: "'DM Sans', sans-serif", fontSize: '0.85rem',
+              fontWeight: 600, cursor: archiving ? 'default' : 'pointer',
+              opacity: archiving ? 0.7 : 1, transition: 'opacity 0.15s',
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+            }}
+          >
+            <Archive size={13} />
+            {archiving ? 'Archiving…' : 'Archive School'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Custom metrics section ─────────────────────────────────────────────────────
+
+function CustomMetricsSection({ school }) {
+  const metrics = school.customMetrics ? Object.entries(school.customMetrics) : [];
+  if (metrics.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: '2.75rem', paddingTop: '2rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(245,240,232,0.4)', marginBottom: '1rem' }}>
+        Custom Metrics
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+        {metrics.map(([metricId, data]) => (
+          <div key={metricId} style={{
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(255,255,255,0.07)',
+            borderRadius: '8px',
+            padding: '0.85rem 1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1rem',
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.72rem', color: 'rgba(245,240,232,0.38)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '0.2rem' }}>
+                {data.name || metricId.replace(/-/g, ' ')}
+              </div>
+              <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.92rem', color: '#f5f0e8', fontWeight: 500 }}>
+                {data.value ?? '—'}
+              </div>
+            </div>
+            {data.source && (
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.7rem', color: 'rgba(245,240,232,0.3)' }}>
+                  {data.asOf && <span>{data.asOf} · </span>}
+                  {data.sourceUrl
+                    ? <a href={data.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#E8976B', textDecoration: 'none' }}>{data.source}</a>
+                    : data.source
+                  }
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const STAT_CELLS = [
@@ -672,6 +788,7 @@ const COLS = 3;
 
 export default function SchoolProfile() {
   const { schoolId } = useParams();
+  const navigate = useNavigate();
   const { school, loading } = useSchool(schoolId);
   const { user } = useAuth();
 
@@ -680,6 +797,9 @@ export default function SchoolProfile() {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [videoEditing, setVideoEditing] = useState(false);
   const [videoForm, setVideoForm] = useState({ url: '', title: '', description: '', altSearch: '' });
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
+  const [archiveReason, setArchiveReason] = useState('');
+  const [archiving, setArchiving] = useState(false);
 
   if (loading) {
     return (
@@ -747,6 +867,22 @@ export default function SchoolProfile() {
     setVideoEditing(false);
   };
 
+  const handleArchive = async () => {
+    setArchiving(true);
+    try {
+      const ref = doc(db, 'schools', school.id);
+      await updateDoc(ref, {
+        archived: true,
+        archiveReason: archiveReason.trim() || null,
+        archivedBy: user?.displayName ?? 'Unknown',
+        archivedAt: serverTimestamp(),
+      });
+      navigate('/');
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   // ── Grid helpers ─────────────────────────────────────────────────────────────
 
   function cellRadius(idx) {
@@ -789,14 +925,45 @@ export default function SchoolProfile() {
         padding: '1.5rem 1.5rem 5rem',
       }}>
         <div style={{ maxWidth: '860px', margin: '0 auto' }}>
-          <Link
-            to="/"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: 'rgba(245,240,232,0.5)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.84rem', marginBottom: '1.5rem', transition: 'color 0.15s' }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#f5f0e8')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(245,240,232,0.5)')}
-          >
-            <ChevronLeft size={15} /> Back to list
-          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+            <Link
+              to="/"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: 'rgba(245,240,232,0.5)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.84rem', transition: 'color 0.15s' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#f5f0e8')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(245,240,232,0.5)')}
+            >
+              <ChevronLeft size={15} /> Back to list
+            </Link>
+            <button
+              onClick={() => setShowArchiveModal(true)}
+              style={{
+                background: 'none',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '6px',
+                padding: '6px 12px',
+                cursor: 'pointer',
+                color: 'rgba(245,240,232,0.4)',
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: '12px',
+                fontWeight: 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                transition: 'color 0.15s, border-color 0.15s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#ef4444';
+                e.currentTarget.style.borderColor = '#ef4444';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'rgba(245,240,232,0.4)';
+                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
+              }}
+            >
+              <Archive size={14} />
+              Archive
+            </button>
+          </div>
 
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.25rem', flexWrap: 'wrap' }}>
             {/* Initials badge */}
@@ -968,6 +1135,9 @@ export default function SchoolProfile() {
           )}
         </div>
 
+        {/* ── Custom metrics ── */}
+        <CustomMetricsSection school={school} />
+
         {/* ── Sources footer ── */}
         {sources.length > 0 && (
           <div style={{ marginTop: '2.5rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
@@ -1004,6 +1174,18 @@ export default function SchoolProfile() {
           </div>
         )}
       </div>
+
+      {/* ── Archive modal ── */}
+      {showArchiveModal && (
+        <ArchiveModal
+          school={school}
+          onClose={() => { setShowArchiveModal(false); setArchiveReason(''); }}
+          onConfirm={handleArchive}
+          archiveReason={archiveReason}
+          setArchiveReason={setArchiveReason}
+          archiving={archiving}
+        />
+      )}
     </>
   );
 }

@@ -1,11 +1,19 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, NavLink } from 'react-router-dom';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { db } from '../firebase';
 
 export default function NavBar() {
   const { user, signOut } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const [archivedCount, setArchivedCount] = useState(0);
+
+  useEffect(() => {
+    const q = query(collection(db, 'schools'), where('archived', '==', true));
+    return onSnapshot(q, (snap) => setArchivedCount(snap.size));
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -69,6 +77,19 @@ export default function NavBar() {
           onMouseLeave={e => { if (!e.currentTarget.style.borderBottomColor.includes('E8976B')) e.currentTarget.style.color = 'rgba(245,240,232,0.65)'; }}
         >
           Archive
+          {archivedCount > 0 && (
+            <span style={{
+              marginLeft: '0.35rem',
+              background: 'rgba(245,240,232,0.12)',
+              borderRadius: '10px',
+              padding: '1px 6px',
+              fontSize: '0.72rem',
+              fontWeight: 600,
+              verticalAlign: 'middle',
+            }}>
+              {archivedCount}
+            </span>
+          )}
         </NavLink>
         <NavLink to="/metrics" style={navLinkStyle}
           onMouseEnter={e => { if (!e.currentTarget.style.borderBottomColor.includes('E8976B')) e.currentTarget.style.color = '#f5f0e8'; }}

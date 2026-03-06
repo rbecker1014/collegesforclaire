@@ -12,6 +12,7 @@ import {
   DEFAULT_SYSTEM, DEFAULT_USER,
   DEFAULT_SEARCH_SYSTEM, DEFAULT_SEARCH_USER,
   DEFAULT_CHAT_SYSTEM,
+  DEFAULT_METRIC_SYSTEM, DEFAULT_METRIC_USER,
   seedDefaultPrompts,
 } from '../data/seedPrompts';
 
@@ -53,6 +54,18 @@ const KNOWN_PROMPTS = [
     testType: 'none',
     systemRows: 24,
     userRows: 0,
+  },
+  {
+    docId: 'metric-research',
+    title: 'Metric Research',
+    description: 'Used by the Metrics page to research custom metrics for each school',
+    placeholder: '{{schoolName}}, {{metricName}}, {{metricDescription}}',
+    placeholderNote: '{{schoolName}}, {{metricName}}, and {{metricDescription}} are injected at runtime for each school',
+    defaultSystem: DEFAULT_METRIC_SYSTEM,
+    defaultUser: DEFAULT_METRIC_USER,
+    testType: 'none',
+    systemRows: 10,
+    userRows: 16,
   },
 ];
 
