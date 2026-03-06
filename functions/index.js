@@ -240,36 +240,63 @@ exports.searchSchools = onCall(
 
     const q = query.trim().toLowerCase();
 
-    // Check Firestore cache (24-hour TTL)
+    // Sanitize to a valid Firestore doc ID
     const cacheRef = db.collection("searchCache").doc(
-      // Sanitize to a valid doc ID: keep alphanumeric and spaces → hyphens
       q.replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, "-").slice(0, 100)
     );
+
+    // Check Firestore cache (24-hour TTL); skip entries with 0 results
     try {
       const cacheDoc = await cacheRef.get();
       if (cacheDoc.exists) {
         const cached = cacheDoc.data();
-        const ageMs = Date.now() - (cached.cachedAt?.toMillis() ?? 0);
-        if (ageMs < 24 * 60 * 60 * 1000) {
-          logger.info("searchSchools cache hit", { query: q });
-          return { results: cached.results };
+        if (!cached.results || cached.results.length === 0) {
+          // Stale empty cache — delete and re-search
+          logger.info("searchSchools: deleting empty cache entry", { query: q });
+          cacheRef.delete().catch(() => {});
+        } else {
+          const ageMs = Date.now() - (cached.cachedAt?.toMillis() ?? 0);
+          if (ageMs < 24 * 60 * 60 * 1000) {
+            logger.info("searchSchools cache hit", { query: q, count: cached.results.length });
+            return { results: cached.results };
+          }
         }
       }
     } catch (cacheErr) {
       logger.warn("searchSchools cache read failed", { error: cacheErr.message });
     }
 
-    // Use Claude to look up matching schools
+    // Load prompts from Firestore (fall back to hardcoded defaults)
+    const DEFAULT_SYSTEM = "You are a US college/university lookup tool. You know every accredited US college, including their common abbreviations, nicknames, and acronyms. Return ONLY a JSON array. No markdown, no backticks, no explanation.";
+    const DEFAULT_USER = `Find US colleges/universities matching "{{query}}". The query might be an abbreviation (e.g., "UConn", "SDSU", "MIT", "UCLA"), a nickname (e.g., "Rocky Top", "Boilermakers"), a partial name (e.g., "Clemson", "Iowa"), or a full name. Return up to 8 matching results as a JSON array: [{"name": "Full Official Name", "city": "City", "state": "ST", "url": "https://school-website.edu"}]. Include the most likely match first. Only include real, accredited US schools. If the query is a well-known abbreviation, the first result should be that school. Return ONLY the JSON array, nothing else.`;
+
+    let systemPrompt = DEFAULT_SYSTEM;
+    let userPrompt = DEFAULT_USER;
+    try {
+      const promptDoc = await db.collection("prompts").doc("school-search").get();
+      if (promptDoc.exists) {
+        const data = promptDoc.data();
+        systemPrompt = data.system || DEFAULT_SYSTEM;
+        userPrompt = data.user || DEFAULT_USER;
+        logger.info("searchSchools: using Firestore prompts");
+      } else {
+        logger.info("searchSchools: using hardcoded default prompts");
+      }
+    } catch (promptErr) {
+      logger.warn("searchSchools: failed to load Firestore prompts, using defaults", { error: promptErr.message });
+    }
+
+    // Replace {{query}} placeholder
+    userPrompt = userPrompt.replace(/\{\{query\}\}/g, query.trim());
+
+    // Call Claude
     try {
       const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
       const response = await client.messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 1000,
-        system: "You are a school lookup tool. Return ONLY a JSON array of matching US colleges/universities. No markdown, no backticks, no explanation.",
-        messages: [{
-          role: "user",
-          content: `Find US colleges/universities matching "${query.trim()}". Return up to 8 results as a JSON array: [{"name": "Full Official Name", "city": "City", "state": "ST", "url": "https://school-website.edu"}]. Only include real, accredited schools. If no schools match, return []. Return ONLY the JSON array.`,
-        }],
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
       });
 
       const rawText = response.content
@@ -278,19 +305,33 @@ exports.searchSchools = onCall(
         .join("")
         .trim();
 
-      // Strip markdown fences if present
-      const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+      logger.info("searchSchools Claude response", {
+        query: query.trim(),
+        raw: rawText.slice(0, 500),
+      });
 
-      let results;
+      // Parse JSON array — strip fences, then find [ ... ]
+      const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+      let results = [];
       try {
-        results = JSON.parse(stripped);
-        if (!Array.isArray(results)) results = [];
-      } catch {
-        logger.warn("searchSchools Claude parse failed", { raw: stripped.slice(0, 200) });
+        const first = stripped.indexOf("[");
+        const last = stripped.lastIndexOf("]");
+        if (first !== -1 && last > first) {
+          const parsed = JSON.parse(stripped.slice(first, last + 1));
+          results = Array.isArray(parsed) ? parsed : [];
+        } else {
+          results = JSON.parse(stripped);
+          if (!Array.isArray(results)) results = [];
+        }
+      } catch (parseErr) {
+        logger.warn("searchSchools: JSON parse failed", {
+          error: parseErr.message,
+          raw: stripped.slice(0, 300),
+        });
         results = [];
       }
 
-      // Write to cache (best-effort)
+      // Cache (best-effort)
       cacheRef.set({ results, cachedAt: admin.firestore.FieldValue.serverTimestamp(), query: q })
         .catch((e) => logger.warn("searchSchools cache write failed", { error: e.message }));
 

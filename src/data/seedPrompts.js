@@ -89,15 +89,25 @@ export const DEFAULT_USER = `Research {{schoolName}} and return a complete profi
 
 Important: Research thoroughly using web search. Be honest in the Claire's Fit assessment. Not every school will meet all three criteria. Pros and cons should be specific, not generic.`;
 
+export const DEFAULT_SEARCH_SYSTEM = `You are a US college/university lookup tool. You know every accredited US college, including their common abbreviations, nicknames, and acronyms. Return ONLY a JSON array. No markdown, no backticks, no explanation.`;
+
+export const DEFAULT_SEARCH_USER = `Find US colleges/universities matching "{{query}}". The query might be an abbreviation (e.g., "UConn", "SDSU", "MIT", "UCLA"), a nickname (e.g., "Rocky Top", "Boilermakers"), a partial name (e.g., "Clemson", "Iowa"), or a full name. Return up to 8 matching results as a JSON array: [{"name": "Full Official Name", "city": "City", "state": "ST", "url": "https://school-website.edu"}]. Include the most likely match first. Only include real, accredited US schools. If the query is a well-known abbreviation, the first result should be that school. Return ONLY the JSON array, nothing else.`;
+
 export async function seedDefaultPrompts(db) {
-  const ref = doc(db, 'prompts', 'school-profile');
-  const snap = await getDoc(ref);
-  if (snap.exists()) return;
-  await setDoc(ref, {
-    system: DEFAULT_SYSTEM,
-    user: DEFAULT_USER,
-    lastEditedBy: 'System',
-    lastEditedAt: serverTimestamp(),
-    version: 1,
-  });
+  const seeds = [
+    { id: 'school-profile', system: DEFAULT_SYSTEM, user: DEFAULT_USER },
+    { id: 'school-search', system: DEFAULT_SEARCH_SYSTEM, user: DEFAULT_SEARCH_USER },
+  ];
+  await Promise.all(seeds.map(async ({ id, system, user }) => {
+    const ref = doc(db, 'prompts', id);
+    const snap = await getDoc(ref);
+    if (snap.exists()) return;
+    await setDoc(ref, {
+      system,
+      user,
+      lastEditedBy: 'System',
+      lastEditedAt: serverTimestamp(),
+      version: 1,
+    });
+  }));
 }
