@@ -340,6 +340,16 @@ export default function ChatPanel() {
   const inputRef = useRef(null);
   const hasShownPulse = useRef(false);
   const [showPulse, setShowPulse] = useState(true);
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
 
   // Extract current schoolId from URL
   const schoolMatch = location.pathname.match(/^\/school\/([^/]+)/);
@@ -496,8 +506,12 @@ export default function ChatPanel() {
         onClick={() => setOpen((o) => !o)}
         aria-label="Open chat"
         style={{
-          position: 'fixed', bottom: '24px', right: '24px',
-          width: 56, height: 56, borderRadius: '50%',
+          position: 'fixed',
+          bottom: isMobile ? '16px' : '24px',
+          right: isMobile ? '16px' : '24px',
+          width: isMobile ? 48 : 56,
+          height: isMobile ? 48 : 56,
+          borderRadius: '50%',
           background: '#E8976B', border: 'none', cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           boxShadow: '0 4px 20px rgba(232,151,107,0.4)',
@@ -517,7 +531,7 @@ export default function ChatPanel() {
       {/* Panel */}
       <div style={{
         position: 'fixed', top: 0, right: 0, bottom: 0,
-        width: '420px',
+        width: isMobile ? '100vw' : '420px',
         background: '#151515',
         borderLeft: '1px solid rgba(255,255,255,0.08)',
         boxShadow: '-8px 0 40px rgba(0,0,0,0.5)',
