@@ -222,8 +222,9 @@ exports.generateMetric = onCall(
 /**
  * searchSchools
  *
- * Proxies the College Scorecard API server-side to avoid CORS issues.
- * Accepts { query } — no auth required.
+ * Proxies the College Scorecard API server-side (avoids CORS).
+ * Caches results in Firestore for 24 hours to avoid DEMO_KEY rate limits.
+ * Retries once on 429. Accepts { query } — no auth required.
  * Returns { results: [{ id, name, city, state, url }] }
  */
 exports.searchSchools = onCall(
@@ -234,15 +235,47 @@ exports.searchSchools = onCall(
       throw new HttpsError("invalid-argument", "query must be at least 3 characters.");
     }
 
+    const q = query.trim().toLowerCase();
+
+    // Check Firestore cache (24-hour TTL)
+    const cacheRef = db.collection("searchCache").doc(
+      // Sanitize to a valid doc ID: keep alphanumeric and spaces → hyphens
+      q.replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, "-").slice(0, 100)
+    );
+    try {
+      const cacheDoc = await cacheRef.get();
+      if (cacheDoc.exists) {
+        const cached = cacheDoc.data();
+        const ageMs = Date.now() - (cached.cachedAt?.toMillis() ?? 0);
+        if (ageMs < 24 * 60 * 60 * 1000) {
+          logger.info("searchSchools cache hit", { query: q });
+          return { results: cached.results };
+        }
+      }
+    } catch (cacheErr) {
+      logger.warn("searchSchools cache read failed", { error: cacheErr.message });
+    }
+
+    // Fetch from College Scorecard API with one retry on 429
     const encoded = encodeURIComponent(query.trim());
-    const url =
+    const apiUrl =
       `https://api.data.gov/ed/collegescorecard/v1/schools.json` +
       `?school.name=${encoded}` +
       `&fields=id,school.name,school.city,school.state,school.school_url` +
       `&per_page=8&api_key=DEMO_KEY`;
 
+    async function fetchWithRetry(retries = 1) {
+      const res = await fetch(apiUrl);
+      if (res.status === 429 && retries > 0) {
+        logger.warn("searchSchools rate limited, retrying in 1s");
+        await new Promise((r) => setTimeout(r, 1000));
+        return fetchWithRetry(retries - 1);
+      }
+      return res;
+    }
+
     try {
-      const res = await fetch(url);
+      const res = await fetchWithRetry();
       if (!res.ok) {
         throw new HttpsError("internal", `College Scorecard API error: ${res.status}`);
       }
@@ -254,6 +287,11 @@ exports.searchSchools = onCall(
         state: s["school.state"],
         url: s["school.school_url"],
       }));
+
+      // Write to cache (best-effort — don't fail the request if this errors)
+      cacheRef.set({ results, cachedAt: admin.firestore.FieldValue.serverTimestamp(), query: q })
+        .catch((e) => logger.warn("searchSchools cache write failed", { error: e.message }));
+
       return { results };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
