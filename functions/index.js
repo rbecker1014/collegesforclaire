@@ -59,31 +59,93 @@ exports.generateSchoolProfile = onCall(
       const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
       const response = await client.messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 8000,
+        max_tokens: 16000,
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       });
 
-      // Extract text blocks from the response
-      const textBlocks = response.content.filter((b) => b.type === "text");
-      let rawText = textBlocks.map((b) => b.text).join("");
+      // Log content block summary to help debug parsing issues
+      const blockSummary = response.content.map((b) => ({
+        type: b.type,
+        len: b.type === "text" ? b.text.length : undefined,
+      }));
+      logger.info("Claude response blocks", {
+        stopReason: response.stop_reason,
+        blockCount: response.content.length,
+        blocks: blockSummary,
+      });
+
+      // Concatenate ALL text blocks (web search may interleave tool_use/tool_result blocks)
+      const rawText = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("");
 
       // Strip markdown code fences if present
-      rawText = rawText
-        .replace(/```json\n?/g, "")
+      const stripped = rawText
+        .replace(/```json\n?/gi, "")
         .replace(/```\n?/g, "")
         .trim();
 
-      // Parse JSON
+      logger.info("Extracted text for parsing", {
+        totalLength: stripped.length,
+        first500: stripped.slice(0, 500),
+        last500: stripped.slice(-500),
+      });
+
+      // Parse JSON with multiple fallback strategies
       let profile;
+      let parseError;
+
+      // Strategy 1: direct parse after fence stripping
       try {
-        profile = JSON.parse(rawText);
-      } catch (parseError) {
-        logger.error("JSON parse failed", { rawText: rawText.slice(0, 500) });
+        profile = JSON.parse(stripped);
+      } catch (e1) {
+        parseError = e1;
+        logger.warn("Strategy 1 (direct parse) failed", { error: e1.message });
+      }
+
+      // Strategy 2: extract between first '{' and last '}'
+      if (!profile) {
+        try {
+          const first = stripped.indexOf("{");
+          const last = stripped.lastIndexOf("}");
+          if (first !== -1 && last > first) {
+            profile = JSON.parse(stripped.slice(first, last + 1));
+          }
+        } catch (e2) {
+          logger.warn("Strategy 2 (brace extraction) failed", { error: e2.message });
+        }
+      }
+
+      // Strategy 3: same extraction on the raw (un-stripped) concatenated text
+      if (!profile) {
+        try {
+          const first = rawText.indexOf("{");
+          const last = rawText.lastIndexOf("}");
+          if (first !== -1 && last > first) {
+            profile = JSON.parse(rawText.slice(first, last + 1));
+          }
+        } catch (e3) {
+          logger.warn("Strategy 3 (raw brace extraction) failed", { error: e3.message });
+        }
+      }
+
+      if (!profile) {
+        logger.error("All JSON parse strategies failed", {
+          strippedLength: stripped.length,
+          rawLength: rawText.length,
+          first500: stripped.slice(0, 500),
+          last500: stripped.slice(-500),
+          parseError: parseError ? parseError.message : "unknown",
+        });
         throw new HttpsError(
           "internal",
-          `Failed to parse Claude response as JSON: ${rawText.slice(0, 200)}`
+          `Failed to parse Claude response as JSON. ` +
+          `stop_reason=${response.stop_reason} ` +
+          `text_length=${stripped.length} ` +
+          `preview: ${stripped.slice(0, 1000)}`
         );
       }
 
