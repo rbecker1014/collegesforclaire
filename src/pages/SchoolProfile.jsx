@@ -5,10 +5,8 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
 import { useSchool } from '../hooks/useSchool';
-import { useNotes, addNote, editNote, deleteNote } from '../hooks/useNotes';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
-import { timeAgo } from '../utils/timeAgo';
 
 // ─── Shared input style ────────────────────────────────────────────────────────
 
@@ -662,238 +660,6 @@ function YouTubeIcon() {
   );
 }
 
-// ─── Notes ─────────────────────────────────────────────────────────────────────
-
-const NOTE_CATEGORIES = [
-  { key: 'general',      emoji: '📝', label: 'General' },
-  { key: 'campus-visit', emoji: '🏫', label: 'Campus Visit' },
-  { key: 'research',     emoji: '🔍', label: 'Research' },
-  { key: 'financial',    emoji: '💰', label: 'Financial' },
-  { key: 'gut-feeling',  emoji: '💭', label: 'Gut Feeling' },
-];
-
-function CategoryPills({ selected, onChange, primaryColor }) {
-  return (
-    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-      {NOTE_CATEGORIES.map((c) => {
-        const active = selected === c.key;
-        return (
-          <button
-            key={c.key}
-            onClick={() => onChange(c.key)}
-            style={{
-              background: active ? primaryColor : 'rgba(255,255,255,0.05)',
-              color: active ? '#111' : 'rgba(245,240,232,0.6)',
-              border: active ? 'none' : '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '20px',
-              padding: '4px 11px',
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: '0.75rem',
-              fontWeight: active ? 600 : 400,
-              cursor: 'pointer',
-              transition: 'background 0.15s, color 0.15s',
-            }}
-          >
-            {c.emoji} {c.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function NoteCard({ note, schoolId, user, primaryColor }) {
-  const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState(note.text);
-  const [editCategory, setEditCategory] = useState(note.category || 'general');
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  const isAuthor = user?.email === note.authorEmail;
-  const cat = NOTE_CATEGORIES.find((c) => c.key === note.category) || NOTE_CATEGORIES[0];
-
-  const handleSave = async () => {
-    if (!editText.trim()) return;
-    setSaving(true);
-    try {
-      await editNote(schoolId, note.id, { text: editText.trim(), category: editCategory });
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    await deleteNote(schoolId, note.id);
-  };
-
-  return (
-    <div style={{
-      background: '#1A1A1A',
-      border: '1px solid rgba(255,255,255,0.07)',
-      borderRadius: '10px',
-      padding: '1rem',
-    }}>
-      {/* Top row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem', flexWrap: 'wrap' }}>
-        {note.authorPhoto ? (
-          <img src={note.authorPhoto} alt={note.authorName} style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-        ) : (
-          <div style={{ width: 24, height: 24, borderRadius: '50%', background: primaryColor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '10px', fontWeight: 700, color: '#111' }}>
-            {note.authorName?.[0] ?? '?'}
-          </div>
-        )}
-        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '13px', fontWeight: 600, color: '#f5f0e8' }}>
-          {note.authorName}
-        </span>
-        <span style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '2px 8px', fontFamily: "'DM Sans', sans-serif", fontSize: '11px', color: 'rgba(245,240,232,0.55)' }}>
-          {cat.emoji} {cat.label}
-        </span>
-        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '11px', color: 'rgba(245,240,232,0.28)', marginLeft: 'auto' }}>
-          {timeAgo(note.createdAt)}
-          {note.editedAt && <span style={{ marginLeft: '0.3rem' }}>(edited)</span>}
-        </span>
-      </div>
-
-      {/* Content / edit */}
-      {editing ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-          <CategoryPills selected={editCategory} onChange={setEditCategory} primaryColor={primaryColor} />
-          <textarea
-            value={editText}
-            onChange={(e) => setEditText(e.target.value)}
-            rows={3}
-            autoFocus
-            style={{
-              width: '100%', boxSizing: 'border-box',
-              background: '#111', border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: '8px', padding: '10px 12px',
-              color: '#f5f0e8', fontFamily: "'DM Sans', sans-serif",
-              fontSize: '0.875rem', lineHeight: 1.6,
-              resize: 'vertical', outline: 'none',
-            }}
-          />
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              onClick={handleSave}
-              disabled={!editText.trim() || saving}
-              style={{ background: primaryColor, border: 'none', borderRadius: '6px', padding: '0.4rem 1rem', color: '#111', fontFamily: "'DM Sans', sans-serif", fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', opacity: saving ? 0.7 : 1 }}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={() => { setEditing(false); setEditText(note.text); setEditCategory(note.category || 'general'); }} style={GHOST_BTN}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '14px', color: 'rgba(245,240,232,0.82)', lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' }}>
-          {note.text}
-        </p>
-      )}
-
-      {/* Author actions */}
-      {isAuthor && !editing && (
-        <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {confirmDelete ? (
-            <>
-              <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '12px', color: 'rgba(245,240,232,0.45)' }}>Delete this note?</span>
-              <button onClick={handleDelete} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', color: '#ef4444', padding: 0 }}>Yes, delete</button>
-              <button onClick={() => setConfirmDelete(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', color: 'rgba(245,240,232,0.35)', padding: 0 }}>Cancel</button>
-            </>
-          ) : (
-            <>
-              <button onClick={() => setEditing(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', color: 'rgba(245,240,232,0.35)', padding: 0, transition: 'color 0.15s' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#f5f0e8')} onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(245,240,232,0.35)')}>Edit</button>
-              <button onClick={() => setConfirmDelete(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '12px', color: 'rgba(245,240,232,0.35)', padding: 0, transition: 'color 0.15s' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')} onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(245,240,232,0.35)')}>Delete</button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NotesTab({ school, user, primaryColor }) {
-  const { notes, loading } = useNotes(school?.id);
-  const [text, setText] = useState('');
-  const [category, setCategory] = useState('general');
-  const [submitting, setSubmitting] = useState(false);
-
-  if (!school) return null;
-
-  const handleAdd = async () => {
-    if (!text.trim()) return;
-    setSubmitting(true);
-    try {
-      await addNote(school.id, { text: text.trim(), category }, user);
-      setText('');
-      setCategory('general');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      {/* Add note form */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-        <CategoryPills selected={category} onChange={setCategory} primaryColor={primaryColor} />
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={3}
-          placeholder="Add a note about this school…"
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            background: '#1A1A1A', border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '8px', padding: '10px 12px',
-            color: '#f5f0e8', fontFamily: "'DM Sans', sans-serif",
-            fontSize: '0.875rem', lineHeight: 1.6,
-            resize: 'vertical', outline: 'none',
-          }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleAdd(); }}
-        />
-        <div>
-          <button
-            onClick={handleAdd}
-            disabled={!text.trim() || submitting}
-            style={{
-              background: primaryColor, border: 'none', borderRadius: '7px',
-              padding: '0.5rem 1.1rem', color: '#111',
-              fontFamily: "'DM Sans', sans-serif", fontSize: '0.875rem',
-              fontWeight: 600, cursor: (!text.trim() || submitting) ? 'default' : 'pointer',
-              opacity: (!text.trim() || submitting) ? 0.5 : 1,
-              transition: 'opacity 0.15s',
-            }}
-          >
-            {submitting ? 'Adding…' : 'Add Note'}
-          </button>
-        </div>
-      </div>
-
-      {/* Notes list */}
-      {loading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
-          <div className="spinner" />
-        </div>
-      )}
-
-      {!loading && notes.length === 0 && (
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', color: 'rgba(245,240,232,0.3)', textAlign: 'center', padding: '2rem 0', margin: 0 }}>
-          No notes yet. Add your thoughts about this school above.
-        </p>
-      )}
-
-      {!loading && notes.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {notes.map((note) => (
-            <NoteCard key={note.id} note={note} schoolId={school.id} user={user} primaryColor={primaryColor} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Archive modal ─────────────────────────────────────────────────────────────
 
@@ -1141,7 +907,6 @@ export default function SchoolProfile() {
     { key: 'nursing', label: 'Nursing' },
     { key: 'campusLife', label: 'Campus Life' },
     { key: 'clairesFit', label: "Claire's Fit" },
-    { key: 'notes', label: `Notes${school.noteCount ? ` (${school.noteCount})` : ''}` },
   ];
 
   const isVideoLastEdit = school.lastEdit?.field === 'video';
@@ -1276,7 +1041,6 @@ export default function SchoolProfile() {
         {activeTab === 'nursing' && <NursingTab school={school} onFieldSave={handleFieldSave} />}
         {activeTab === 'campusLife' && <CampusLifeTab school={school} />}
         {activeTab === 'clairesFit' && <ClairesFitTab school={school} onFieldSave={handleFieldSave} />}
-        {activeTab === 'notes' && <NotesTab school={school} user={user} primaryColor={primaryColor} />}
 
         {/* Last edit line — for non-video edits */}
         {school.lastEdit?.by && !isVideoLastEdit && (

@@ -59,6 +59,8 @@ function AppRoutes() {
   );
 }
 
+console.log("BUILD TIME: 2026-03-06 v2");
+
 export default function App() {
   return (
     <BrowserRouter>

@@ -14,7 +14,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, ChevronRight, Check, X, StickyNote } from 'lucide-react';
+import { GripVertical, ChevronRight, Check, X } from 'lucide-react';
 import NavBar from '../components/NavBar';
 import AddSchoolModal from '../components/AddSchoolModal';
 import { useSchools, updateRanks } from '../hooks/useSchools';
@@ -248,18 +248,6 @@ function SchoolCard({ school, dragHandleProps, isBeingDragged, isDimmed, isMobil
               </div>
             )
           ))}
-          {school.noteCount > 0 && (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '3px',
-              fontSize: isMobile ? '10px' : '0.73rem',
-              fontFamily: "'DM Sans', sans-serif",
-              color: 'rgba(245,240,232,0.28)',
-              marginLeft: isMobile ? 0 : 'auto',
-            }}>
-              <StickyNote size={isMobile ? 10 : 12} />
-              {school.noteCount}
-            </div>
-          )}
         </div>
       </div>
 
