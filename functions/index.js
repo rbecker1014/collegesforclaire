@@ -217,6 +217,31 @@ exports.chatWithClaire = onCall(
     const schools = schoolsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (a.rank || 99) - (b.rank || 99));
 
+    // 1b. Fetch notes for each school (up to 10 per school, newest first)
+    const notesPromises = schools.map(async (s) => {
+      try {
+        const snap = await db.collection("schools").doc(s.id)
+          .collection("notes").orderBy("createdAt", "desc").limit(10).get();
+        return {
+          schoolId: s.id,
+          notes: snap.docs.map((d) => {
+            const n = d.data();
+            return {
+              text: n.text,
+              authorName: n.authorName,
+              category: n.category,
+              createdAt: n.createdAt ? n.createdAt.toDate().toISOString() : null,
+            };
+          }),
+        };
+      } catch {
+        return { schoolId: s.id, notes: [] };
+      }
+    });
+    const notesResults = await Promise.all(notesPromises);
+    const notesBySchool = {};
+    notesResults.forEach(({ schoolId, notes }) => { notesBySchool[schoolId] = notes; });
+
     // 2. Build school data context
     const schoolDataJSON = JSON.stringify(
       schools.map((s) => ({
@@ -230,6 +255,7 @@ exports.chatWithClaire = onCall(
         claireFit: s.claireFit,
         video: s.video,
         customMetrics: s.customMetrics,
+        notes: notesBySchool[s.id] || [],
       })),
       null,
       2
