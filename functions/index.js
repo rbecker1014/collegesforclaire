@@ -218,3 +218,47 @@ exports.generateMetric = onCall(
     return { status: "not yet implemented", metricName, schoolId, prompts };
   }
 );
+
+/**
+ * searchSchools
+ *
+ * Proxies the College Scorecard API server-side to avoid CORS issues.
+ * Accepts { query } — no auth required.
+ * Returns { results: [{ id, name, city, state, url }] }
+ */
+exports.searchSchools = onCall(
+  { region: "us-central1" },
+  async (request) => {
+    const { query } = request.data;
+    if (!query || typeof query !== "string" || query.trim().length < 3) {
+      throw new HttpsError("invalid-argument", "query must be at least 3 characters.");
+    }
+
+    const encoded = encodeURIComponent(query.trim());
+    const url =
+      `https://api.data.gov/ed/collegescorecard/v1/schools.json` +
+      `?school.name=${encoded}` +
+      `&fields=id,school.name,school.city,school.state,school.school_url` +
+      `&per_page=8&api_key=DEMO_KEY`;
+
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new HttpsError("internal", `College Scorecard API error: ${res.status}`);
+      }
+      const data = await res.json();
+      const results = (data.results || []).map((s) => ({
+        id: s.id,
+        name: s["school.name"],
+        city: s["school.city"],
+        state: s["school.state"],
+        url: s["school.school_url"],
+      }));
+      return { results };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("searchSchools failed", { message: err.message });
+      throw new HttpsError("internal", `Search failed: ${err.message}`);
+    }
+  }
+);
