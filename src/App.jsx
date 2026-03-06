@@ -1,35 +1,34 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import SignIn from './pages/SignIn';
+import Landing from './pages/Landing';
+import SchoolProfile from './pages/SchoolProfile';
+import Archive from './pages/Archive';
+import Metrics from './pages/Metrics';
+import PromptEditor from './pages/PromptEditor';
 
-function App() {
-  const [count, setCount] = useState(0)
+function AppRoutes() {
+  const { user } = useAuth();
+
+  if (!user) return <SignIn />;
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/school/:schoolId" element={<SchoolProfile />} />
+      <Route path="/archive" element={<Archive />} />
+      <Route path="/metrics" element={<Metrics />} />
+      <Route path="/admin/prompts" element={<PromptEditor />} />
+    </Routes>
+  );
 }
 
-export default App
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}
