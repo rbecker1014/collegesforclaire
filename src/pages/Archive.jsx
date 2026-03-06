@@ -30,6 +30,7 @@ export default function Archive() {
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((s) => s && s.name)
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       setSchools(data);
       setLoading(false);

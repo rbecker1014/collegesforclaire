@@ -13,8 +13,8 @@ export function useSchools() {
       (snapshot) => {
         const data = snapshot.docs
           .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((s) => s.archived !== true)
-          .sort((a, b) => a.rank - b.rank);
+          .filter((s) => s && s.name && s.archived !== true)
+          .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
         setSchools(data);
         setLoading(false);
       },

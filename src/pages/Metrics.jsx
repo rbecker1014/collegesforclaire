@@ -62,6 +62,7 @@ export default function Metrics() {
     return onSnapshot(q, (snap) => {
       const data = snap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((s) => s && s.name)
         .sort((a, b) => (a.rank || 99) - (b.rank || 99));
       setSchools(data);
     });

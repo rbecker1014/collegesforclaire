@@ -363,6 +363,7 @@ export default function ChatPanel() {
       (snap) => {
         setSchools(
           snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+            .filter((s) => s && s.name)
             .sort((a, b) => (a.rank || 99) - (b.rank || 99))
         );
       }
