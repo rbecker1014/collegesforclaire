@@ -228,7 +228,10 @@ exports.generateMetric = onCall(
  * Returns { results: [{ id, name, city, state, url }] }
  */
 exports.searchSchools = onCall(
-  { region: "us-central1" },
+  {
+    region: "us-central1",
+    secrets: ["CLAUDE_API_KEY"],
+  },
   async (request) => {
     const { query } = request.data;
     if (!query || typeof query !== "string" || query.trim().length < 3) {
@@ -256,39 +259,38 @@ exports.searchSchools = onCall(
       logger.warn("searchSchools cache read failed", { error: cacheErr.message });
     }
 
-    // Fetch from College Scorecard API with one retry on 429
-    const encoded = encodeURIComponent(query.trim());
-    const apiUrl =
-      `https://api.data.gov/ed/collegescorecard/v1/schools.json` +
-      `?school.name=${encoded}` +
-      `&fields=id,school.name,school.city,school.state,school.school_url` +
-      `&per_page=8&api_key=DEMO_KEY`;
-
-    async function fetchWithRetry(retries = 1) {
-      const res = await fetch(apiUrl);
-      if (res.status === 429 && retries > 0) {
-        logger.warn("searchSchools rate limited, retrying in 1s");
-        await new Promise((r) => setTimeout(r, 1000));
-        return fetchWithRetry(retries - 1);
-      }
-      return res;
-    }
-
+    // Use Claude to look up matching schools
     try {
-      const res = await fetchWithRetry();
-      if (!res.ok) {
-        throw new HttpsError("internal", `College Scorecard API error: ${res.status}`);
-      }
-      const data = await res.json();
-      const results = (data.results || []).map((s) => ({
-        id: s.id,
-        name: s["school.name"],
-        city: s["school.city"],
-        state: s["school.state"],
-        url: s["school.school_url"],
-      }));
+      const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        system: "You are a school lookup tool. Return ONLY a JSON array of matching US colleges/universities. No markdown, no backticks, no explanation.",
+        messages: [{
+          role: "user",
+          content: `Find US colleges/universities matching "${query.trim()}". Return up to 8 results as a JSON array: [{"name": "Full Official Name", "city": "City", "state": "ST", "url": "https://school-website.edu"}]. Only include real, accredited schools. If no schools match, return []. Return ONLY the JSON array.`,
+        }],
+      });
 
-      // Write to cache (best-effort — don't fail the request if this errors)
+      const rawText = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+
+      // Strip markdown fences if present
+      const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+
+      let results;
+      try {
+        results = JSON.parse(stripped);
+        if (!Array.isArray(results)) results = [];
+      } catch {
+        logger.warn("searchSchools Claude parse failed", { raw: stripped.slice(0, 200) });
+        results = [];
+      }
+
+      // Write to cache (best-effort)
       cacheRef.set({ results, cachedAt: admin.firestore.FieldValue.serverTimestamp(), query: q })
         .catch((e) => logger.warn("searchSchools cache write failed", { error: e.message }));
 
