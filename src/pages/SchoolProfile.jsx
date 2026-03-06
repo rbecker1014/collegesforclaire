@@ -48,6 +48,7 @@ function hexToRgba(hex, alpha) {
 }
 
 function getInitials(name) {
+  if (!name) return '';
   return name
     .split(/[\s,]+/)
     .filter((w) => w.length > 0 && !/^(of|the|and|for|in|at|a)$/i.test(w))
@@ -348,6 +349,7 @@ function ProConList({ items = [], fieldPath, onFieldSave, color, isPro }) {
 // ─── Tab: Overview ─────────────────────────────────────────────────────────────
 
 function OverviewTab({ school, onFieldSave }) {
+  if (!school) return null;
   const o = school.overview;
   const summary = `${school.name} is a ${o?.type?.value ?? 'university'} set on a ${o?.campusSize?.value ?? '—'} campus in ${o?.location?.value ?? '—'}. With ${o?.enrollment?.value ?? '—'} undergrads, ${o?.clubsOrgs?.value ?? '—'} student organizations, and ${o?.conference?.value ?? '—'} athletics, it offers a vibrant social scene steeped in deep traditions.`;
 
@@ -429,6 +431,7 @@ function OverviewTab({ school, onFieldSave }) {
 // ─── Tab: Nursing ──────────────────────────────────────────────────────────────
 
 function NursingTab({ school, onFieldSave }) {
+  if (!school) return null;
   const n = school.nursing;
   const color = school.primaryColor;
 
@@ -520,6 +523,7 @@ function NursingTab({ school, onFieldSave }) {
 // ─── Tab: Campus Life ──────────────────────────────────────────────────────────
 
 function CampusLifeTab({ school }) {
+  if (!school) return null;
   const cl = school.campusLife;
   const items = [
     { emoji: '🏈', title: 'Athletics', text: cl?.athletics },
@@ -554,6 +558,7 @@ function CampusLifeTab({ school }) {
 // ─── Tab: Claire's Fit ─────────────────────────────────────────────────────────
 
 function ClairesFitTab({ school, onFieldSave }) {
+  if (!school) return null;
   const fit = school.claireFit;
   const color = school.primaryColor;
 
@@ -809,10 +814,12 @@ function NoteCard({ note, schoolId, user, primaryColor }) {
 }
 
 function NotesTab({ school, user, primaryColor }) {
-  const { notes, loading } = useNotes(school.id);
+  const { notes, loading } = useNotes(school?.id);
   const [text, setText] = useState('');
   const [category, setCategory] = useState('general');
   const [submitting, setSubmitting] = useState(false);
+
+  if (!school) return null;
 
   const handleAdd = async () => {
     if (!text.trim()) return;
@@ -891,6 +898,7 @@ function NotesTab({ school, user, primaryColor }) {
 // ─── Archive modal ─────────────────────────────────────────────────────────────
 
 function ArchiveModal({ school, onClose, onConfirm, archiveReason, setArchiveReason, archiving }) {
+  if (!school) return null;
   return (
     <div
       style={{
@@ -959,6 +967,7 @@ function ArchiveModal({ school, onClose, onConfirm, archiveReason, setArchiveRea
 // ─── Custom metrics section ─────────────────────────────────────────────────────
 
 function CustomMetricsSection({ school }) {
+  if (!school) return null;
   const metrics = school.customMetrics ? Object.entries(school.customMetrics) : [];
   if (metrics.length === 0) return null;
 
@@ -1034,28 +1043,27 @@ export default function SchoolProfile() {
   const [archiveReason, setArchiveReason] = useState('');
   const [archiving, setArchiving] = useState(false);
 
-  if (loading) {
+  if (loading || !school) {
+    if (!loading && !school) {
+      return (
+        <>
+          <NavBar />
+          <div style={{ padding: '4rem 1.5rem', textAlign: 'center' }}>
+            <p style={{ color: 'rgba(245,240,232,0.45)', fontFamily: "'DM Sans', sans-serif", marginBottom: '1.25rem' }}>
+              School not found.
+            </p>
+            <Link to="/" style={{ color: '#E8976B', fontFamily: "'DM Sans', sans-serif", fontSize: '0.9rem' }}>
+              ← Back to list
+            </Link>
+          </div>
+        </>
+      );
+    }
     return (
       <>
         <NavBar />
         <div style={{ display: 'flex', justifyContent: 'center', padding: '5rem' }}>
           <div className="spinner" />
-        </div>
-      </>
-    );
-  }
-
-  if (!school) {
-    return (
-      <>
-        <NavBar />
-        <div style={{ padding: '4rem 1.5rem', textAlign: 'center' }}>
-          <p style={{ color: 'rgba(245,240,232,0.45)', fontFamily: "'DM Sans', sans-serif", marginBottom: '1.25rem' }}>
-            School not found.
-          </p>
-          <Link to="/" style={{ color: '#E8976B', fontFamily: "'DM Sans', sans-serif", fontSize: '0.9rem' }}>
-            ← Back to list
-          </Link>
         </div>
       </>
     );
