@@ -734,7 +734,7 @@ function ArchiveModal({ school, onClose, onConfirm, archiveReason, setArchiveRea
 
 function CustomMetricsSection({ school }) {
   if (!school) return null;
-  const metrics = school.customMetrics ? Object.entries(school.customMetrics) : [];
+  const metrics = school.customMetrics ? Object.entries(school.customMetrics).filter(([, data]) => data != null) : [];
   if (metrics.length === 0) return null;
 
   return (

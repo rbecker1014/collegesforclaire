@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   collection, onSnapshot, query, where,
-  doc, deleteDoc, writeBatch,
+  doc, deleteDoc, writeBatch, deleteField,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Trash2, RefreshCw, Plus, FlaskConical } from 'lucide-react';
@@ -125,9 +125,7 @@ export default function Metrics() {
     schools.forEach((school) => {
       if (school.customMetrics?.[metric.id] !== undefined) {
         const ref = doc(db, 'schools', school.id);
-        // Use FieldValue.delete() — but we're client-side so use deleteField()
-        // We'll just set to null and handle on display
-        batch.update(ref, { [`customMetrics.${metric.id}`]: null });
+        batch.update(ref, { [`customMetrics.${metric.id}`]: deleteField() });
       }
     });
     await batch.commit();
