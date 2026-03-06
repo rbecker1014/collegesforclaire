@@ -16,6 +16,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, ChevronRight, Check, X } from 'lucide-react';
 import NavBar from '../components/NavBar';
+import AddSchoolModal from '../components/AddSchoolModal';
 import { useSchools, updateRanks } from '../hooks/useSchools';
 import { db } from '../firebase';
 import { seedDatabase } from '../data/seedFirestore';
@@ -220,6 +221,7 @@ export default function Landing() {
   const { schools, loading, error } = useSchools();
   const [activeId, setActiveId] = useState(null);
   const [seeding, setSeeding] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -285,18 +287,21 @@ export default function Landing() {
 
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
             <button
-              disabled
-              title="Coming in Phase 2"
+              onClick={() => setShowAddModal(true)}
               style={{
                 padding: '0.5rem 1rem',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.07)',
+                background: '#E8976B',
+                border: 'none',
                 borderRadius: '7px',
-                color: 'rgba(245,240,232,0.25)',
+                color: '#111111',
                 fontFamily: "'DM Sans', sans-serif",
                 fontSize: '0.875rem',
-                cursor: 'not-allowed',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'opacity 0.15s',
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
             >
               Add School
             </button>
@@ -402,6 +407,9 @@ export default function Landing() {
           </button>
         </div>
       </main>
+      {showAddModal && (
+        <AddSchoolModal onClose={() => setShowAddModal(false)} />
+      )}
     </>
   );
 }
