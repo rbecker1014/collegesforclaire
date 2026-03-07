@@ -353,6 +353,8 @@ export default function AddSchoolModal({ onClose }) {
             <div style={{ position: 'relative' }}>
               <input
                 ref={searchInputRef}
+                id="school-search"
+                name="school-search"
                 type="text"
                 placeholder="Search for a school..."
                 value={query}
@@ -418,6 +420,8 @@ export default function AddSchoolModal({ onClose }) {
               </label>
               <input
                 ref={manualInputRef}
+                id="school-manual-name"
+                name="school-manual-name"
                 type="text"
                 placeholder="e.g., Clemson University"
                 value={manualName}

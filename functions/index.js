@@ -9,6 +9,27 @@ admin.initializeApp();
 const db = admin.firestore();
 
 /**
+ * Downloads an image URL server-side and stores it in Firebase Storage.
+ * Returns the public storage.googleapis.com URL.
+ * @param {string} imageUrl - External image URL to download
+ * @param {string} schoolId - Used for the storage path
+ */
+async function downloadAndStoreImage(imageUrl, schoolId) {
+  const imageResponse = await fetch(imageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(`Failed to download image: ${imageResponse.status} ${imageResponse.statusText}`);
+  }
+  const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
+  const ext = contentType.includes("png") ? "png" : "jpg";
+  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+  const bucket = admin.storage().bucket();
+  const file = bucket.file(`schools/${schoolId}/banner.${ext}`);
+  await file.save(imageBuffer, { contentType, public: true });
+  const storageUrl = `https://storage.googleapis.com/${bucket.name}/schools/${schoolId}/banner.${ext}`;
+  return storageUrl;
+}
+
+/**
  * generateSchoolProfile
  *
  * Accepts { schoolName } and calls Claude (with web search) to generate a full
@@ -165,6 +186,20 @@ exports.generateSchoolProfile = onCall(
           "internal",
           "Claude response is missing required fields (id, name, overview, nursing)."
         );
+      }
+
+      // If Claude found a banner image, download and store in Firebase Storage
+      // to avoid CORB issues with cross-origin Wikimedia URLs in the browser.
+      if (profile.images?.banner?.url) {
+        try {
+          const storageUrl = await downloadAndStoreImage(profile.images.banner.url, profile.id);
+          profile.images.banner.originalUrl = profile.images.banner.url;
+          profile.images.banner.url = storageUrl;
+          logger.info("generateSchoolProfile: banner stored in Storage", { schoolId: profile.id, storageUrl });
+        } catch (imgErr) {
+          logger.warn("generateSchoolProfile: failed to store banner image, clearing it", { error: imgErr.message });
+          delete profile.images.banner;
+        }
       }
 
       // Assign rank = count of existing non-archived schools + 1
@@ -654,15 +689,19 @@ If you cannot find one on Wikimedia Commons, try the school's official website f
       throw new HttpsError("internal", "Claude did not return an image URL.");
     }
 
+    // Download server-side and store in Firebase Storage to avoid CORB in browser.
+    const storageUrl = await downloadAndStoreImage(imageData.url, schoolId);
+
     await db.collection("schools").doc(schoolId).update({
       "images.banner": {
-        url: imageData.url,
+        url: storageUrl,
         source: imageData.source || "Wikimedia Commons",
         sourceUrl: imageData.sourceUrl || null,
+        originalUrl: imageData.url,
       },
     });
 
-    logger.info("backfillSchoolImage: saved", { schoolId, url: imageData.url });
+    logger.info("backfillSchoolImage: saved", { schoolId, storageUrl, originalUrl: imageData.url });
     return { success: true, imageUrl: imageData.url };
   }
 );

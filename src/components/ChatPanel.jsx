@@ -660,6 +660,8 @@ export default function ChatPanel() {
         }}>
           <textarea
             ref={inputRef}
+            id="chat-input"
+            name="chat-input"
             rows={1}
             value={input}
             onChange={(e) => {
