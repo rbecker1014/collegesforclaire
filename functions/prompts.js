@@ -29,7 +29,9 @@ CRITICAL SOURCE REQUIREMENTS:
 - Be CONSISTENT: use the same source for the same type of data across all schools.
 - If you cannot find a data point, set value to "Not available" and source to "Not found".
 - sourceUrl must be a real, valid URL. Do not fabricate URLs.
-- asOf should reflect when the data is from (e.g., "Fall 2024", "2025-2026").`;
+- asOf should reflect when the data is from (e.g., "Fall 2024", "2025-2026").
+
+For the banner image, find a high-quality campus photo from Wikimedia Commons. Search for the school name on commons.wikimedia.org. Use the direct image URL (the one ending in .jpg or .png from upload.wikimedia.org). Prefer wide/landscape shots of iconic campus buildings, aerial views, or recognizable landmarks.`;
 
   const user = `Research ${schoolName} and return a complete profile as JSON matching this exact schema:
 
@@ -91,6 +93,14 @@ CRITICAL SOURCE REQUIREMENTS:
     "title": "Video title",
     "description": "1 sentence describing what the video shows",
     "altSearch": "YouTube search query suggestion for more campus videos"
+  },
+  "images": {
+    "banner": {
+      "url": "URL to a high-quality campus photo. Use Wikimedia Commons images (aerial campus shots, iconic buildings, campus landmarks). The URL should be a direct image link ending in .jpg or .png from upload.wikimedia.org (e.g. https://upload.wikimedia.org/wikipedia/commons/...). These are stable, free-to-use URLs. If you cannot find a Wikimedia image, use an image from the school's official website.",
+      "source": "Wikimedia Commons",
+      "sourceUrl": "URL to the image page on commons.wikimedia.org (not the direct image URL)"
+    },
+    "additional": []
   },
   "customMetrics": {}
 }

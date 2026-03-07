@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Check, X, Pencil, Archive } from 'lucide-react';
+import { ChevronLeft, Check, X, Pencil, Archive, Camera, RefreshCw } from 'lucide-react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
 import { useSchool } from '../hooks/useSchool';
 import { useNotes, addNote, editNote, deleteNote } from '../hooks/useNotes';
 import { useAuth } from '../contexts/AuthContext';
 import { timeAgo } from '../utils/timeAgo';
-import { db } from '../firebase';
+import { db, storage } from '../firebase';
 
 // ─── Shared input style ────────────────────────────────────────────────────────
 
@@ -1015,6 +1016,22 @@ export default function SchoolProfile() {
   const [archiveReason, setArchiveReason] = useState('');
   const [archiving, setArchiving] = useState(false);
 
+  // Banner image state
+  const [imgError, setImgError] = useState(false);
+  const [heroHovered, setHeroHovered] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadToast, setUploadToast] = useState(false);
+  const bannerInputRef = useRef(null);
+
+  useEffect(() => {
+    const url = school?.images?.banner?.url;
+    if (!url) { setImgError(false); return; }
+    setImgError(false);
+    const img = new window.Image();
+    img.onerror = () => setImgError(true);
+    img.src = url;
+  }, [school?.images?.banner?.url]);
+
   if (loading || !school) {
     if (!loading && !school) {
       return (
@@ -1043,6 +1060,8 @@ export default function SchoolProfile() {
 
   const { primaryColor } = school;
   const sources = collectSources(school);
+  const bannerUrl = school.images?.banner?.url;
+  const hasBanner = !!bannerUrl && !imgError;
 
   // ── Firestore write helpers ──────────────────────────────────────────────────
 
@@ -1078,6 +1097,40 @@ export default function SchoolProfile() {
       'lastEdit.field': 'video',
     });
     setVideoEditing(false);
+  };
+
+  const handleBannerUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image must be under 5MB.');
+      e.target.value = '';
+      return;
+    }
+    setUploading(true);
+    try {
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z]/g, '') || 'jpg';
+      const fileRef = storageRef(storage, `schools/${school.id}/banner.${ext}`);
+      await uploadBytes(fileRef, file);
+      const downloadURL = await getDownloadURL(fileRef);
+      await updateDoc(doc(db, 'schools', school.id), {
+        'images.banner': {
+          url: downloadURL,
+          source: 'Manual Upload',
+          sourceUrl: null,
+          uploadedBy: user?.displayName ?? 'Unknown',
+          uploadedAt: serverTimestamp(),
+        },
+        ...writeLastEdit('images'),
+      });
+      setUploadToast(true);
+      setTimeout(() => setUploadToast(false), 3000);
+    } catch (err) {
+      alert('Upload failed: ' + err.message);
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
   };
 
   const handleArchive = async () => {
@@ -1124,20 +1177,50 @@ export default function SchoolProfile() {
     <>
       <NavBar />
 
+      {/* ── Upload toast ── */}
+      {uploadToast && (
+        <div style={{
+          position: 'fixed', bottom: '1.5rem', right: '1.5rem', zIndex: 1000,
+          background: '#1A1A1A', border: '1px solid rgba(111,207,151,0.3)',
+          borderRadius: '8px', padding: '0.65rem 1.1rem',
+          fontFamily: "'DM Sans', sans-serif", fontSize: '0.85rem',
+          color: '#6fcf97', boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+        }}>
+          ✓ Image updated!
+        </div>
+      )}
+      <input
+        ref={bannerInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        style={{ display: 'none' }}
+        onChange={handleBannerUpload}
+      />
+
       {/* ── Hero ── */}
-      <div style={{
-        background: `
-          repeating-linear-gradient(
-            45deg,
-            transparent,
-            transparent 12px,
-            rgba(255,255,255,0.018) 12px,
-            rgba(255,255,255,0.018) 13px
-          ),
-          linear-gradient(150deg, ${hexToRgba(primaryColor, 0.48)} 0%, #1a1a1a 55%)
-        `,
-        padding: '1.5rem 1.5rem 5rem',
-      }}>
+      <div
+        onMouseEnter={() => setHeroHovered(true)}
+        onMouseLeave={() => setHeroHovered(false)}
+        style={{
+          ...(hasBanner ? {
+            background: `linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.65) 100%), url("${bannerUrl}") center / cover no-repeat`,
+          } : {
+            background: `
+              repeating-linear-gradient(
+                45deg,
+                transparent,
+                transparent 12px,
+                rgba(255,255,255,0.018) 12px,
+                rgba(255,255,255,0.018) 13px
+              ),
+              linear-gradient(150deg, ${hexToRgba(primaryColor, 0.48)} 0%, #1a1a1a 55%)
+            `,
+          }),
+          minHeight: '280px',
+          padding: '1.5rem 1.5rem 5rem',
+          position: 'relative',
+        }}
+      >
         <div style={{ maxWidth: '860px', margin: '0 auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
             <Link
@@ -1148,35 +1231,59 @@ export default function SchoolProfile() {
             >
               <ChevronLeft size={15} /> Back to list
             </Link>
-            <button
-              onClick={() => setShowArchiveModal(true)}
-              style={{
-                background: 'none',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                cursor: 'pointer',
-                color: 'rgba(245,240,232,0.4)',
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: '12px',
-                fontWeight: 500,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                transition: 'color 0.15s, border-color 0.15s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = '#ef4444';
-                e.currentTarget.style.borderColor = '#ef4444';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = 'rgba(245,240,232,0.4)';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
-              }}
-            >
-              <Archive size={14} />
-              Archive
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                onClick={() => bannerInputRef.current?.click()}
+                disabled={uploading}
+                title="Update banner photo"
+                style={{
+                  background: 'rgba(0,0,0,0.35)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '6px',
+                  padding: '6px',
+                  cursor: uploading ? 'default' : 'pointer',
+                  color: 'rgba(245,240,232,0.7)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  backdropFilter: 'blur(4px)',
+                  opacity: heroHovered ? 1 : 0.3,
+                  transition: 'opacity 0.2s',
+                }}
+              >
+                {uploading
+                  ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                  : <Camera size={14} />}
+              </button>
+              <button
+                onClick={() => setShowArchiveModal(true)}
+                style={{
+                  background: 'none',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '6px',
+                  padding: '6px 12px',
+                  cursor: 'pointer',
+                  color: 'rgba(245,240,232,0.4)',
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  transition: 'color 0.15s, border-color 0.15s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#ef4444';
+                  e.currentTarget.style.borderColor = '#ef4444';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'rgba(245,240,232,0.4)';
+                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
+                }}
+              >
+                <Archive size={14} />
+                Archive
+              </button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.25rem', flexWrap: 'wrap' }}>
@@ -1216,6 +1323,22 @@ export default function SchoolProfile() {
               </div>
             </div>
           </div>
+
+          {/* Photo credit */}
+          {hasBanner && school.images?.banner?.source && school.images.banner.source !== 'Manual Upload' && (
+            <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
+              {school.images.banner.sourceUrl ? (
+                <a href={school.images.banner.sourceUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize: '9px', color: 'rgba(245,240,232,0.4)', textDecoration: 'none' }}>
+                  Photo: {school.images.banner.source}
+                </a>
+              ) : (
+                <span style={{ fontSize: '9px', color: 'rgba(245,240,232,0.4)' }}>
+                  Photo: {school.images.banner.source}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
