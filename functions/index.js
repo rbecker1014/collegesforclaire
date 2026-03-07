@@ -13,9 +13,9 @@ const db = admin.firestore();
  * Downloads an image URL server-side and stores it in Firebase Storage.
  * Returns a Firebase Storage download URL (firebasestorage.googleapis.com).
  * @param {string} imageUrl - External image URL to download
- * @param {string} schoolId - Used for the storage path
+ * @param {string} pathBase - Storage path base (e.g. "schools/id/banner"); extension is appended from content-type
  */
-async function downloadAndStoreImage(imageUrl, schoolId) {
+async function downloadAndStoreImage(imageUrl, pathBase) {
   const imageResponse = await fetch(imageUrl, {
     headers: { "User-Agent": "Mozilla/5.0 (compatible; CollegesBot/1.0)" },
   });
@@ -33,7 +33,7 @@ async function downloadAndStoreImage(imageUrl, schoolId) {
   } catch {}
 
   const bucket = admin.storage().bucket(bucketName);
-  const filePath = `schools/${schoolId}/banner.${ext}`;
+  const filePath = pathBase.includes(".") ? pathBase : `${pathBase}.${ext}`;
   const file = bucket.file(filePath);
 
   // Generate a Firebase download token so the URL matches what getDownloadURL() produces
@@ -213,7 +213,7 @@ exports.generateSchoolProfile = onCall(
       // to avoid CORB issues with cross-origin Wikimedia URLs in the browser.
       if (profile.images?.banner?.url) {
         try {
-          const storageUrl = await downloadAndStoreImage(profile.images.banner.url, profile.id);
+          const storageUrl = await downloadAndStoreImage(profile.images.banner.url, `schools/${profile.id}/banner`);
           profile.images.banner.originalUrl = profile.images.banner.url;
           profile.images.banner.url = storageUrl;
           logger.info("generateSchoolProfile: banner stored in Storage", { schoolId: profile.id, storageUrl });
@@ -624,17 +624,19 @@ exports.generateMetric = onCall(
 );
 
 /**
- * backfillSchoolImage
+ * backfillSchoolImages
  *
  * Accepts { schoolId, schoolName } and uses Claude (with web search) to find
- * a high-quality campus photo URL, then writes it to schools/{schoolId}/images/banner.
+ * 6 candidate campus photos, downloads them server-side, uploads to Firebase Storage,
+ * and saves the candidates array to schools/{schoolId}/images.candidates.
+ * Returns the candidates array to the client for display in the photo picker.
  * Requires authentication.
  */
-exports.backfillSchoolImage = onCall(
+exports.backfillSchoolImages = onCall(
   {
     region: "us-central1",
     secrets: ["CLAUDE_API_KEY"],
-    timeoutSeconds: 120,
+    timeoutSeconds: 180,
   },
   async (request) => {
     if (!request.auth) {
@@ -646,85 +648,99 @@ exports.backfillSchoolImage = onCall(
       throw new HttpsError("invalid-argument", "schoolId and schoolName are required.");
     }
 
-    logger.info("backfillSchoolImage called", { uid: request.auth.uid, schoolId, schoolName });
+    logger.info("backfillSchoolImages called", { uid: request.auth.uid, schoolId, schoolName });
 
-    // Step 1: Ask Claude (no web search — it knows this from training data) for the
-    // school's official website URL. This is faster and avoids the multi-turn tool loop.
     const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
-    const websiteResponse = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 150,
-      system: "You are a US college database. Return ONLY valid JSON, no markdown, no explanation.",
-      messages: [{
-        role: "user",
-        content: `What is the official website URL for ${schoolName}? Return ONLY: {"url": "https://..."}`,
-      }],
-    });
 
-    const websiteText = websiteResponse.content
-      .filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-    const wsStripped = websiteText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+    // Ask Claude (with web search) to find 6 photo URLs
+    const messages = [{
+      role: "user",
+      content: `Find 6 different high-quality photo URLs for ${schoolName}'s campus. Try these approaches:
+1. Fetch the school's official website and look for og:image meta tag
+2. Search for the school on their admissions or about page for campus photos
+3. Look for Wikimedia Commons images of the campus
 
-    let websiteUrl;
+Return JSON array: [{"url": "direct image URL", "caption": "brief description of what's in the photo", "source": "source name"}]
+
+Include a mix of: aerial/campus overview, iconic building, student life/campus activity, athletics/stadium, library or academic building, campus green/scenery. URLs must be direct image links.`,
+    }];
+
+    const allTextBlocks = [];
+    const MAX_ITER = 15;
+
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4000,
+        system: "You find campus photos for US universities. Return ONLY valid JSON, no markdown.",
+        messages,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      });
+
+      const textBlocks = response.content.filter((b) => b.type === "text");
+      allTextBlocks.push(...textBlocks);
+
+      logger.info("backfillSchoolImages iteration", {
+        iter,
+        stopReason: response.stop_reason,
+        blockCount: response.content.length,
+        textLength: textBlocks.reduce((s, b) => s + b.text.length, 0),
+      });
+
+      if (response.stop_reason === "end_turn") break;
+
+      messages.push({ role: "assistant", content: response.content });
+      if (response.stop_reason !== "pause_turn") {
+        messages.push({ role: "user", content: [{ type: "text", text: "Please provide the JSON array of 6 photos." }] });
+      }
+    }
+
+    const rawText = allTextBlocks.map((b) => b.text).join("").trim();
+    const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+
+    let photoList = [];
     try {
-      const first = wsStripped.indexOf("{");
-      const last = wsStripped.lastIndexOf("}");
-      websiteUrl = JSON.parse(wsStripped.slice(first, last + 1)).url;
-    } catch {
-      throw new HttpsError("internal", `Could not determine website URL for ${schoolName}.`);
+      const first = stripped.indexOf("[");
+      const last = stripped.lastIndexOf("]");
+      if (first !== -1 && last > first) {
+        const parsed = JSON.parse(stripped.slice(first, last + 1));
+        photoList = Array.isArray(parsed) ? parsed : [];
+      }
+    } catch (parseErr) {
+      logger.warn("backfillSchoolImages: JSON parse failed", { error: parseErr.message, raw: stripped.slice(0, 300) });
     }
 
-    if (!websiteUrl || !websiteUrl.startsWith("http")) {
-      throw new HttpsError("internal", `Invalid website URL returned: ${websiteUrl}`);
+    logger.info("backfillSchoolImages: Claude returned candidates", { count: photoList.length, schoolId });
+
+    // Download each photo and upload to Firebase Storage
+    const candidates = [];
+    for (let i = 0; i < photoList.length; i++) {
+      const photo = photoList[i];
+      if (!photo.url || !photo.url.startsWith("http")) continue;
+      try {
+        const storageUrl = await downloadAndStoreImage(photo.url, `schools/${schoolId}/photos/photo-${i}`);
+        candidates.push({
+          url: storageUrl,
+          caption: photo.caption || "",
+          source: photo.source || "",
+          selected: false,
+        });
+        logger.info("backfillSchoolImages: stored photo", { schoolId, index: i, storageUrl });
+      } catch (err) {
+        logger.warn("backfillSchoolImages: failed to store photo", { schoolId, index: i, url: photo.url, error: err.message });
+      }
     }
 
-    logger.info("backfillSchoolImage: fetching website", { schoolId, websiteUrl });
-
-    // Step 2: Fetch the school's homepage and parse og:image / twitter:image meta tags.
-    const pageResp = await fetch(websiteUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; CollegesBot/1.0)" },
-      redirect: "follow",
-    });
-    if (!pageResp.ok) {
-      throw new HttpsError("internal", `Could not load ${websiteUrl}: HTTP ${pageResp.status}`);
+    if (candidates.length === 0) {
+      throw new HttpsError("not-found", `Could not download any photos for ${schoolName}.`);
     }
-    const html = await pageResp.text();
-
-    const ogMatch =
-      html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-      html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
-      html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i) ||
-      html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']twitter:image["']/i);
-
-    if (!ogMatch || !ogMatch[1]) {
-      throw new HttpsError("not-found", `No og:image meta tag found on ${websiteUrl}`);
-    }
-
-    let imageUrl = ogMatch[1].trim();
-    // Resolve protocol-relative and root-relative URLs
-    if (imageUrl.startsWith("//")) {
-      imageUrl = "https:" + imageUrl;
-    } else if (imageUrl.startsWith("/")) {
-      const base = new URL(websiteUrl);
-      imageUrl = `${base.protocol}//${base.host}${imageUrl}`;
-    }
-
-    logger.info("backfillSchoolImage: found og:image", { schoolId, imageUrl });
-
-    // Step 3: Download server-side and store in Firebase Storage to avoid CORB in browser.
-    const storageUrl = await downloadAndStoreImage(imageUrl, schoolId);
 
     await db.collection("schools").doc(schoolId).update({
-      "images.banner": {
-        url: storageUrl,
-        source: schoolName,
-        sourceUrl: websiteUrl,
-        originalUrl: imageUrl,
-      },
+      "images.candidates": candidates,
     });
 
-    logger.info("backfillSchoolImage: saved", { schoolId, storageUrl });
-    return { success: true, imageUrl: storageUrl };
+    logger.info("backfillSchoolImages: saved", { schoolId, count: candidates.length });
+    return { success: true, candidates };
   }
 );
 

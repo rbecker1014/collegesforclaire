@@ -1,16 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Check, X, Pencil, Archive, Camera, RefreshCw } from 'lucide-react';
+import { ChevronLeft, Check, X, Pencil, Archive, RefreshCw } from 'lucide-react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
+import PhotoPickerModal from '../components/PhotoPickerModal';
 import { useSchool } from '../hooks/useSchool';
 import { useNotes, addNote, editNote, deleteNote } from '../hooks/useNotes';
 import { useAuth } from '../contexts/AuthContext';
 import { timeAgo } from '../utils/timeAgo';
-import { db, storage, functions } from '../firebase';
+import { db, functions } from '../firebase';
 
 // ─── Shared input style ────────────────────────────────────────────────────────
 
@@ -351,7 +351,9 @@ function ProConList({ items = [], fieldPath, onFieldSave, color, isPro }) {
 
 // ─── Tab: Overview ─────────────────────────────────────────────────────────────
 
-function OverviewTab({ school, onFieldSave }) {
+function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos }) {
+  const [lightboxPhoto, setLightboxPhoto] = useState(null);
+
   if (!school) return null;
   const o = school.overview;
   const summary = `${school.name} is a ${o?.type?.value ?? 'university'} set on a ${o?.campusSize?.value ?? '—'} campus in ${o?.location?.value ?? '—'}. With ${o?.enrollment?.value ?? '—'} undergrads, ${o?.clubsOrgs?.value ?? '—'} student organizations, and ${o?.conference?.value ?? '—'} athletics, it offers a vibrant social scene steeped in deep traditions.`;
@@ -369,6 +371,8 @@ function OverviewTab({ school, onFieldSave }) {
     { label: 'Greek Life', data: o?.greekLife },
     { label: '4-Year Grad Rate', data: o?.fourYearGradRate },
   ];
+
+  const gallery = school.images?.gallery;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -415,6 +419,98 @@ function OverviewTab({ school, onFieldSave }) {
         </div>
       </div>
 
+      {/* Photo Gallery */}
+      {gallery && gallery.length > 0 ? (
+        <div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            {gallery.map((photo, idx) => (
+              <div
+                key={idx}
+                onClick={() => setLightboxPhoto(photo)}
+                style={{
+                  flex: 1,
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  cursor: 'pointer',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'scale(1.02)';
+                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = '';
+                  e.currentTarget.style.boxShadow = '';
+                }}
+              >
+                <img
+                  src={photo.url}
+                  alt={photo.caption}
+                  style={{ width: '100%', height: '200px', objectFit: 'cover', display: 'block' }}
+                />
+                <div style={{
+                  padding: '0.4rem 0.6rem',
+                  background: 'rgba(255,255,255,0.03)',
+                  fontSize: '11px',
+                  color: 'rgba(245,240,232,0.4)',
+                  fontFamily: "'DM Sans', sans-serif",
+                  lineHeight: 1.3,
+                }}>
+                  {photo.caption}
+                </div>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={onFindPhotos}
+            disabled={findingPhotos}
+            style={{
+              background: 'none', border: 'none', padding: 0,
+              cursor: findingPhotos ? 'default' : 'pointer',
+              fontSize: '11px', color: 'rgba(245,240,232,0.3)',
+              fontFamily: "'DM Sans', sans-serif",
+              marginTop: '0.5rem', textDecoration: 'underline',
+            }}
+          >
+            {findingPhotos ? 'Finding photos…' : 'Update Photos'}
+          </button>
+        </div>
+      ) : (
+        <div style={{
+          border: '1px dashed rgba(255,255,255,0.12)',
+          borderRadius: '10px',
+          padding: '2rem',
+          textAlign: 'center',
+        }}>
+          <button
+            onClick={onFindPhotos}
+            disabled={findingPhotos}
+            style={{
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '6px',
+              padding: '0.6rem 1.2rem',
+              color: 'rgba(245,240,232,0.7)',
+              fontFamily: "'DM Sans', sans-serif",
+              fontSize: '0.875rem',
+              cursor: findingPhotos ? 'default' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
+          >
+            {findingPhotos ? (
+              <>
+                <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                Finding campus photos for {school.name}…
+              </>
+            ) : (
+              'Find Campus Photos'
+            )}
+          </button>
+        </div>
+      )}
+
       {/* What Students Say */}
       <div style={{
         background: 'rgba(255,255,255,0.03)',
@@ -427,6 +523,38 @@ function OverviewTab({ school, onFieldSave }) {
           {school.campusLife?.socialScene}
         </p>
       </div>
+
+      {/* Lightbox */}
+      {lightboxPhoto && (
+        <div
+          onClick={() => setLightboxPhoto(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 3000,
+            background: 'rgba(0,0,0,0.88)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '2rem', cursor: 'pointer',
+          }}
+        >
+          <img
+            src={lightboxPhoto.url}
+            alt={lightboxPhoto.caption}
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '100%', maxHeight: '85vh', objectFit: 'contain', borderRadius: '8px', cursor: 'default' }}
+          />
+          <button
+            onClick={() => setLightboxPhoto(null)}
+            style={{
+              position: 'absolute', top: '1.5rem', right: '1.5rem',
+              background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: '50%', width: '36px', height: '36px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: '#fff',
+            }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1017,23 +1145,10 @@ export default function SchoolProfile() {
   const [archiveReason, setArchiveReason] = useState('');
   const [archiving, setArchiving] = useState(false);
 
-  // Banner image state
-  const [imgError, setImgError] = useState(false);
-  const [heroHovered, setHeroHovered] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadToast, setUploadToast] = useState(false);
-  const [findingImage, setFindingImage] = useState(false);
-  const [findImageError, setFindImageError] = useState('');
-  const bannerInputRef = useRef(null);
-
-  useEffect(() => {
-    const url = school?.images?.banner?.url;
-    if (!url) { setImgError(false); return; }
-    setImgError(false);
-    const img = new window.Image();
-    img.onerror = () => setImgError(true);
-    img.src = url;
-  }, [school?.images?.banner?.url]);
+  // Photo gallery state
+  const [findingPhotos, setFindingPhotos] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [candidates, setCandidates] = useState([]);
 
   if (loading || !school) {
     if (!loading && !school) {
@@ -1063,8 +1178,6 @@ export default function SchoolProfile() {
 
   const { primaryColor } = school;
   const sources = collectSources(school);
-  const bannerUrl = school.images?.banner?.url;
-  const hasBanner = !!bannerUrl && !imgError;
 
   // ── Firestore write helpers ──────────────────────────────────────────────────
 
@@ -1102,52 +1215,17 @@ export default function SchoolProfile() {
     setVideoEditing(false);
   };
 
-  const handleBannerUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      alert('Image must be under 5MB.');
-      e.target.value = '';
-      return;
-    }
-    setUploading(true);
+  const handleFindPhotos = async () => {
+    setFindingPhotos(true);
     try {
-      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z]/g, '') || 'jpg';
-      const fileRef = storageRef(storage, `schools/${school.id}/banner.${ext}`);
-      await uploadBytes(fileRef, file);
-      const downloadURL = await getDownloadURL(fileRef);
-      await updateDoc(doc(db, 'schools', school.id), {
-        'images.banner': {
-          url: downloadURL,
-          source: 'Manual Upload',
-          sourceUrl: null,
-          uploadedBy: user?.displayName ?? 'Unknown',
-          uploadedAt: serverTimestamp(),
-        },
-        ...writeLastEdit('images'),
-      });
-      setUploadToast(true);
-      setTimeout(() => setUploadToast(false), 3000);
+      const fn = httpsCallable(functions, 'backfillSchoolImages', { timeout: 180000 });
+      const result = await fn({ schoolId: school.id, schoolName: school.name });
+      setCandidates(result.data.candidates || []);
+      setPickerOpen(true);
     } catch (err) {
-      alert('Upload failed: ' + err.message);
+      console.error('Failed to find photos:', err);
     } finally {
-      setUploading(false);
-      e.target.value = '';
-    }
-  };
-
-  const handleFindImage = async () => {
-    setFindingImage(true);
-    setFindImageError('');
-    try {
-      const fn = httpsCallable(functions, 'backfillSchoolImage', { timeout: 120000 });
-      await fn({ schoolId: school.id, schoolName: school.name });
-      setUploadToast(true);
-      setTimeout(() => setUploadToast(false), 3000);
-    } catch (err) {
-      setFindImageError(err.message || 'Could not find image');
-    } finally {
-      setFindingImage(false);
+      setFindingPhotos(false);
     }
   };
 
@@ -1195,48 +1273,19 @@ export default function SchoolProfile() {
     <>
       <NavBar />
 
-      {/* ── Upload toast ── */}
-      {uploadToast && (
-        <div style={{
-          position: 'fixed', bottom: '1.5rem', right: '1.5rem', zIndex: 1000,
-          background: '#1A1A1A', border: '1px solid rgba(111,207,151,0.3)',
-          borderRadius: '8px', padding: '0.65rem 1.1rem',
-          fontFamily: "'DM Sans', sans-serif", fontSize: '0.85rem',
-          color: '#6fcf97', boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
-        }}>
-          ✓ Image updated!
-        </div>
-      )}
-      <input
-        ref={bannerInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp"
-        style={{ display: 'none' }}
-        onChange={handleBannerUpload}
-      />
-
       {/* ── Hero ── */}
       <div
-        onMouseEnter={() => setHeroHovered(true)}
-        onMouseLeave={() => setHeroHovered(false)}
         style={{
-          ...(hasBanner ? {
-            backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.65) 100%), url("${bannerUrl}")`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-          } : {
-            background: `
-              repeating-linear-gradient(
-                45deg,
-                transparent,
-                transparent 12px,
-                rgba(255,255,255,0.018) 12px,
-                rgba(255,255,255,0.018) 13px
-              ),
-              linear-gradient(150deg, ${hexToRgba(primaryColor, 0.48)} 0%, #1a1a1a 55%)
-            `,
-          }),
+          background: `
+            repeating-linear-gradient(
+              45deg,
+              transparent,
+              transparent 12px,
+              rgba(255,255,255,0.018) 12px,
+              rgba(255,255,255,0.018) 13px
+            ),
+            linear-gradient(150deg, ${hexToRgba(primaryColor, 0.48)} 0%, #1a1a1a 55%)
+          `,
           minHeight: '280px',
           padding: '1.5rem 1.5rem 5rem',
           position: 'relative',
@@ -1253,61 +1302,6 @@ export default function SchoolProfile() {
               <ChevronLeft size={15} /> Back to list
             </Link>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              {!hasBanner ? (
-                <>
-                  <button
-                    onClick={handleFindImage}
-                    disabled={findingImage}
-                    title="Find campus photo"
-                    style={{
-                      background: 'rgba(0,0,0,0.35)',
-                      border: '1px solid rgba(255,255,255,0.22)',
-                      borderRadius: '6px',
-                      padding: '6px 10px',
-                      cursor: findingImage ? 'default' : 'pointer',
-                      color: 'rgba(245,240,232,0.85)',
-                      fontFamily: "'DM Sans', sans-serif",
-                      fontSize: '12px',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.35rem',
-                      backdropFilter: 'blur(4px)',
-                    }}
-                  >
-                    {findingImage
-                      ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Finding…</>
-                      : <><Camera size={13} /> Find Photo</>}
-                  </button>
-                  {findImageError && (
-                    <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '11px', color: '#f87171', maxWidth: '160px', lineHeight: 1.3 }}>
-                      {findImageError}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <button
-                  onClick={() => bannerInputRef.current?.click()}
-                  disabled={uploading}
-                  title="Replace banner photo"
-                  style={{
-                    background: 'rgba(0,0,0,0.35)',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: '6px',
-                    padding: '6px',
-                    cursor: uploading ? 'default' : 'pointer',
-                    color: 'rgba(245,240,232,0.7)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    backdropFilter: 'blur(4px)',
-                    opacity: heroHovered ? 1 : 0.3,
-                    transition: 'opacity 0.2s',
-                  }}
-                >
-                  {uploading
-                    ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                    : <Camera size={14} />}
-                </button>
-              )}
               <button
                 onClick={() => setShowArchiveModal(true)}
                 style={{
@@ -1378,21 +1372,6 @@ export default function SchoolProfile() {
             </div>
           </div>
 
-          {/* Photo credit */}
-          {hasBanner && school.images?.banner?.source && school.images.banner.source !== 'Manual Upload' && (
-            <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
-              {school.images.banner.sourceUrl ? (
-                <a href={school.images.banner.sourceUrl} target="_blank" rel="noopener noreferrer"
-                  style={{ fontSize: '9px', color: 'rgba(245,240,232,0.4)', textDecoration: 'none' }}>
-                  Photo: {school.images.banner.source}
-                </a>
-              ) : (
-                <span style={{ fontSize: '9px', color: 'rgba(245,240,232,0.4)' }}>
-                  Photo: {school.images.banner.source}
-                </span>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -1421,7 +1400,7 @@ export default function SchoolProfile() {
           ))}
         </div>
 
-        {activeTab === 'overview' && <OverviewTab school={school} onFieldSave={handleFieldSave} />}
+        {activeTab === 'overview' && <OverviewTab school={school} onFieldSave={handleFieldSave} onFindPhotos={handleFindPhotos} findingPhotos={findingPhotos} />}
         {activeTab === 'nursing' && <NursingTab school={school} onFieldSave={handleFieldSave} />}
         {activeTab === 'campusLife' && <CampusLifeTab school={school} />}
         {activeTab === 'clairesFit' && <ClairesFitTab school={school} onFieldSave={handleFieldSave} />}
@@ -1566,6 +1545,16 @@ export default function SchoolProfile() {
           </div>
         )}
       </div>
+
+      {/* ── Photo picker modal ── */}
+      {pickerOpen && candidates.length > 0 && (
+        <PhotoPickerModal
+          schoolId={school.id}
+          candidates={candidates}
+          onClose={() => setPickerOpen(false)}
+          onSaved={() => setPickerOpen(false)}
+        />
+      )}
 
       {/* ── Archive modal ── */}
       {showArchiveModal && (
