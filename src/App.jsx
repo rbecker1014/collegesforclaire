@@ -1,5 +1,5 @@
 import { Component } from 'react';
-import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useParams, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import SignIn from './pages/SignIn';
 import Landing from './pages/Landing';
@@ -45,17 +45,20 @@ function SchoolProfileRoute() {
 
 function AppRoutes() {
   const { user } = useAuth();
+  const location = useLocation();
 
   if (!user) return <SignIn />;
 
   return (
-    <Routes>
-      <Route path="/" element={<RouteErrorBoundary><Landing /></RouteErrorBoundary>} />
-      <Route path="/school/:schoolId" element={<RouteErrorBoundary><SchoolProfileRoute /></RouteErrorBoundary>} />
-      <Route path="/archive" element={<RouteErrorBoundary><Archive /></RouteErrorBoundary>} />
-      <Route path="/metrics" element={<RouteErrorBoundary><Metrics /></RouteErrorBoundary>} />
-      <Route path="/admin/prompts" element={<RouteErrorBoundary><PromptEditor /></RouteErrorBoundary>} />
-    </Routes>
+    <RouteErrorBoundary key={location.pathname}>
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/school/:schoolId" element={<SchoolProfileRoute />} />
+        <Route path="/archive" element={<Archive />} />
+        <Route path="/metrics" element={<Metrics />} />
+        <Route path="/admin/prompts" element={<PromptEditor />} />
+      </Routes>
+    </RouteErrorBoundary>
   );
 }
 
