@@ -19,7 +19,6 @@ import NavBar from '../components/NavBar';
 import AddSchoolModal from '../components/AddSchoolModal';
 import { useSchools, updateRanks } from '../hooks/useSchools';
 import { db } from '../firebase';
-import { seedDatabase } from '../data/seedFirestore';
 
 // ─── Mobile detection ──────────────────────────────────────────────────────────
 
@@ -276,7 +275,6 @@ function SchoolCard({ school, dragHandleProps, isBeingDragged, isDimmed, isMobil
 export default function Landing() {
   const { schools, loading, error } = useSchools();
   const [activeId, setActiveId] = useState(null);
-  const [seeding, setSeeding] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const isMobile = useIsMobile();
 
@@ -295,15 +293,6 @@ export default function Landing() {
     const newIndex = schools.findIndex((s) => s.id === over.id);
     const reordered = arrayMove(schools, oldIndex, newIndex);
     updateRanks(reordered);
-  }
-
-  async function handleSeed() {
-    setSeeding(true);
-    try {
-      await seedDatabase(db);
-    } finally {
-      setSeeding(false);
-    }
   }
 
   return (
@@ -447,28 +436,6 @@ export default function Landing() {
           </DndContext>
         )}
 
-        {/* Seed data button */}
-        <div style={{ textAlign: 'center', marginTop: '3.5rem' }}>
-          <button
-            onClick={handleSeed}
-            disabled={seeding}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'rgba(245,240,232,0.18)',
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: '0.78rem',
-              cursor: seeding ? 'default' : 'pointer',
-              padding: '0.5rem 1rem',
-              transition: 'color 0.2s',
-              letterSpacing: '0.02em',
-            }}
-            onMouseEnter={(e) => { if (!seeding) e.currentTarget.style.color = 'rgba(245,240,232,0.45)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(245,240,232,0.18)'; }}
-          >
-            {seeding ? 'Seeding…' : 'Seed Data'}
-          </button>
-        </div>
       </main>
       {showAddModal && (
         <AddSchoolModal onClose={() => setShowAddModal(false)} />
