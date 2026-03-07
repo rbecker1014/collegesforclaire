@@ -5,7 +5,9 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
 import { useSchool } from '../hooks/useSchool';
+import { useNotes, addNote, editNote, deleteNote } from '../hooks/useNotes';
 import { useAuth } from '../contexts/AuthContext';
+import { timeAgo } from '../utils/timeAgo';
 import { db } from '../firebase';
 
 // ─── Shared input style ────────────────────────────────────────────────────────
@@ -104,6 +106,7 @@ function TabButton({ label, active, color, onClick }) {
         fontWeight: active ? 600 : 400,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
+        flexShrink: 0,
         transition: 'color 0.15s, border-color 0.15s',
       }}
     >
@@ -730,6 +733,209 @@ function ArchiveModal({ school, onClose, onConfirm, archiveReason, setArchiveRea
   );
 }
 
+// ─── Tab: Notes ────────────────────────────────────────────────────────────────
+
+const NOTE_CATEGORIES = [
+  { key: 'general', label: 'General' },
+  { key: 'visit', label: 'Visit' },
+  { key: 'financial', label: 'Financial' },
+  { key: 'pros', label: 'Pros' },
+  { key: 'cons', label: 'Cons' },
+];
+
+function NotesTab({ school, user }) {
+  if (!school) return null;
+  const { notes, loading } = useNotes(school.id);
+  const [text, setText] = useState('');
+  const [category, setCategory] = useState('general');
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [editCategory, setEditCategory] = useState('general');
+
+  const handleAdd = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      await addNote(school.id, { text: trimmed, category }, user);
+      setText('');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveEdit = async (noteId) => {
+    const trimmed = editText.trim();
+    if (!trimmed) return;
+    await editNote(school.id, noteId, { text: trimmed, category: editCategory });
+    setEditingId(null);
+  };
+
+  const handleDelete = async (noteId) => {
+    if (!window.confirm('Delete this note?')) return;
+    await deleteNote(school.id, noteId);
+  };
+
+  return (
+    <div style={{ paddingBottom: '2rem' }}>
+      {/* Add note form */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+          {NOTE_CATEGORIES.map((c) => (
+            <button
+              key={c.key}
+              onClick={() => setCategory(c.key)}
+              style={{
+                padding: '0.25rem 0.75rem',
+                borderRadius: '20px',
+                border: category === c.key ? 'none' : '1px solid rgba(255,255,255,0.12)',
+                background: category === c.key ? 'rgba(232,151,107,0.2)' : 'transparent',
+                color: category === c.key ? '#E8976B' : 'rgba(245,240,232,0.5)',
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: '0.78rem',
+                cursor: 'pointer',
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Add a note…"
+          rows={3}
+          style={{ ...INPUT_STYLE, resize: 'vertical', minHeight: '72px' }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleAdd(); }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+          <button
+            onClick={handleAdd}
+            disabled={!text.trim() || saving}
+            style={{
+              background: '#E8976B',
+              border: 'none',
+              borderRadius: '7px',
+              padding: '0.45rem 1.1rem',
+              color: '#111',
+              fontFamily: "'DM Sans', sans-serif",
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              cursor: (!text.trim() || saving) ? 'default' : 'pointer',
+              opacity: (!text.trim() || saving) ? 0.55 : 1,
+            }}
+          >
+            {saving ? 'Saving…' : 'Add Note'}
+          </button>
+        </div>
+      </div>
+
+      {/* Notes list */}
+      {loading && <div style={{ color: 'rgba(245,240,232,0.4)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.85rem' }}>Loading…</div>}
+      {!loading && notes.length === 0 && (
+        <p style={{ color: 'rgba(245,240,232,0.3)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.9rem', textAlign: 'center', padding: '2rem 0' }}>
+          No notes yet. Add one above.
+        </p>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        {notes.map((note) => {
+          const catLabel = NOTE_CATEGORIES.find((c) => c.key === note.category)?.label || note.category;
+          const isEditing = editingId === note.id;
+          return (
+            <div key={note.id} style={{
+              background: '#1A1A1A',
+              border: '1px solid rgba(255,255,255,0.07)',
+              borderRadius: '10px',
+              padding: '0.85rem 1rem',
+            }}>
+              {isEditing ? (
+                <>
+                  <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                    {NOTE_CATEGORIES.map((c) => (
+                      <button
+                        key={c.key}
+                        onClick={() => setEditCategory(c.key)}
+                        style={{
+                          padding: '0.2rem 0.65rem',
+                          borderRadius: '20px',
+                          border: editCategory === c.key ? 'none' : '1px solid rgba(255,255,255,0.12)',
+                          background: editCategory === c.key ? 'rgba(232,151,107,0.2)' : 'transparent',
+                          color: editCategory === c.key ? '#E8976B' : 'rgba(245,240,232,0.5)',
+                          fontFamily: "'DM Sans', sans-serif",
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    rows={3}
+                    style={{ ...INPUT_STYLE, resize: 'vertical', marginBottom: '0.5rem' }}
+                    autoFocus
+                  />
+                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                    <button onClick={() => setEditingId(null)} style={GHOST_BTN}>Cancel</button>
+                    <button
+                      onClick={() => handleSaveEdit(note.id)}
+                      style={{ ...GHOST_BTN, background: 'rgba(232,151,107,0.15)', color: '#E8976B', border: '1px solid rgba(232,151,107,0.3)' }}
+                    >
+                      Save
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
+                    <p style={{ margin: 0, fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', color: '#f5f0e8', lineHeight: 1.55, flex: 1 }}>
+                      {note.text}
+                    </p>
+                    <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
+                      <button
+                        onClick={() => { setEditingId(note.id); setEditText(note.text); setEditCategory(note.category || 'general'); }}
+                        style={{ background: 'none', border: 'none', color: 'rgba(245,240,232,0.3)', cursor: 'pointer', padding: '2px' }}
+                        title="Edit"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(note.id)}
+                        style={{ background: 'none', border: 'none', color: 'rgba(245,240,232,0.3)', cursor: 'pointer', padding: '2px' }}
+                        title="Delete"
+                        onMouseEnter={(e) => (e.currentTarget.style.color = '#eb5757')}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(245,240,232,0.3)')}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                    <span style={{
+                      padding: '0.15rem 0.55rem', borderRadius: '20px',
+                      background: 'rgba(232,151,107,0.1)', color: '#E8976B',
+                      fontFamily: "'DM Sans', sans-serif", fontSize: '0.7rem',
+                    }}>
+                      {catLabel}
+                    </span>
+                    <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.7rem', color: 'rgba(245,240,232,0.3)' }}>
+                      {note.authorName} · {timeAgo(note.createdAt)}
+                      {note.editedAt ? ' (edited)' : ''}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Custom metrics section ─────────────────────────────────────────────────────
 
 function CustomMetricsSection({ school }) {
@@ -907,6 +1113,7 @@ export default function SchoolProfile() {
     { key: 'nursing', label: 'Nursing' },
     { key: 'campusLife', label: 'Campus Life' },
     { key: 'clairesFit', label: "Claire's Fit" },
+    { key: 'notes', label: 'Notes' },
   ];
 
   const isVideoLastEdit = school.lastEdit?.field === 'video';
@@ -1041,6 +1248,7 @@ export default function SchoolProfile() {
         {activeTab === 'nursing' && <NursingTab school={school} onFieldSave={handleFieldSave} />}
         {activeTab === 'campusLife' && <CampusLifeTab school={school} />}
         {activeTab === 'clairesFit' && <ClairesFitTab school={school} onFieldSave={handleFieldSave} />}
+        {activeTab === 'notes' && <NotesTab school={school} user={user} />}
 
         {/* Last edit line — for non-video edits */}
         {school.lastEdit?.by && !isVideoLastEdit && (
