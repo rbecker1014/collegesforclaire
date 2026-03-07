@@ -564,6 +564,110 @@ exports.generateMetric = onCall(
 );
 
 /**
+ * backfillSchoolImage
+ *
+ * Accepts { schoolId, schoolName } and uses Claude (with web search) to find
+ * a high-quality campus photo URL, then writes it to schools/{schoolId}/images/banner.
+ * Requires authentication.
+ */
+exports.backfillSchoolImage = onCall(
+  {
+    region: "us-central1",
+    secrets: ["CLAUDE_API_KEY"],
+    timeoutSeconds: 120,
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+
+    const { schoolId, schoolName } = request.data;
+    if (!schoolId || !schoolName) {
+      throw new HttpsError("invalid-argument", "schoolId and schoolName are required.");
+    }
+
+    logger.info("backfillSchoolImage called", { uid: request.auth.uid, schoolId, schoolName });
+
+    const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+
+    const system = "You find campus photos for colleges. Return ONLY valid JSON, no markdown, no backticks, no explanation.";
+    const userPrompt = `Find a high-quality campus photo URL for ${schoolName}.
+
+Search Wikimedia Commons (commons.wikimedia.org) for an aerial or iconic building photo of this campus.
+
+Return ONLY this JSON object:
+{
+  "url": "direct image URL ending in .jpg or .png from upload.wikimedia.org",
+  "source": "Wikimedia Commons",
+  "sourceUrl": "page URL on commons.wikimedia.org for this image"
+}
+
+The url must be a direct image link that works as an img src (from upload.wikimedia.org/wikipedia/commons/...).
+If you cannot find one on Wikimedia Commons, try the school's official website for a campus photo and use that URL instead (set source to the school name).`;
+
+    const messages = [{ role: "user", content: userPrompt }];
+    const allTextBlocks = [];
+    const MAX_ITER = 10;
+
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        system,
+        messages,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      });
+
+      const textBlocks = response.content.filter((b) => b.type === "text");
+      allTextBlocks.push(...textBlocks);
+
+      logger.info("backfillSchoolImage iteration", {
+        iter,
+        stopReason: response.stop_reason,
+        textLength: textBlocks.reduce((s, b) => s + b.text.length, 0),
+      });
+
+      if (response.stop_reason === "end_turn") break;
+
+      messages.push({ role: "assistant", content: response.content });
+      messages.push({ role: "user", content: [{ type: "text", text: "Please provide the JSON result." }] });
+    }
+
+    const rawText = allTextBlocks.map((b) => b.text).join("").trim();
+    const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+
+    let imageData;
+    try {
+      const first = stripped.indexOf("{");
+      const last = stripped.lastIndexOf("}");
+      if (first !== -1 && last > first) {
+        imageData = JSON.parse(stripped.slice(first, last + 1));
+      } else {
+        imageData = JSON.parse(stripped);
+      }
+    } catch (parseErr) {
+      logger.error("backfillSchoolImage: JSON parse failed", { error: parseErr.message, raw: stripped.slice(0, 500) });
+      throw new HttpsError("internal", "Failed to parse image data from Claude response.");
+    }
+
+    if (!imageData.url) {
+      throw new HttpsError("internal", "Claude did not return an image URL.");
+    }
+
+    await db.collection("schools").doc(schoolId).update({
+      "images.banner": {
+        url: imageData.url,
+        source: imageData.source || "Wikimedia Commons",
+        sourceUrl: imageData.sourceUrl || null,
+      },
+    });
+
+    logger.info("backfillSchoolImage: saved", { schoolId, url: imageData.url });
+    return { success: true, imageUrl: imageData.url };
+  }
+);
+
+/**
  * searchSchools
  *
  * Proxies the College Scorecard API server-side (avoids CORS).

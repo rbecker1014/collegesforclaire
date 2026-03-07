@@ -3,13 +3,14 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, Check, X, Pencil, Archive, Camera, RefreshCw } from 'lucide-react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { httpsCallable } from 'firebase/functions';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
 import { useSchool } from '../hooks/useSchool';
 import { useNotes, addNote, editNote, deleteNote } from '../hooks/useNotes';
 import { useAuth } from '../contexts/AuthContext';
 import { timeAgo } from '../utils/timeAgo';
-import { db, storage } from '../firebase';
+import { db, storage, functions } from '../firebase';
 
 // ─── Shared input style ────────────────────────────────────────────────────────
 
@@ -1021,6 +1022,7 @@ export default function SchoolProfile() {
   const [heroHovered, setHeroHovered] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadToast, setUploadToast] = useState(false);
+  const [findingImage, setFindingImage] = useState(false);
   const bannerInputRef = useRef(null);
 
   useEffect(() => {
@@ -1133,6 +1135,21 @@ export default function SchoolProfile() {
     }
   };
 
+  const handleFindImage = async () => {
+    setFindingImage(true);
+    try {
+      const fn = httpsCallable(functions, 'backfillSchoolImage', { timeout: 120000 });
+      await fn({ schoolId: school.id, schoolName: school.name });
+      // onSnapshot will update the UI automatically
+      setUploadToast(true);
+      setTimeout(() => setUploadToast(false), 3000);
+    } catch (err) {
+      alert('Could not find image: ' + err.message);
+    } finally {
+      setFindingImage(false);
+    }
+  };
+
   const handleArchive = async () => {
     setArchiving(true);
     try {
@@ -1203,7 +1220,10 @@ export default function SchoolProfile() {
         onMouseLeave={() => setHeroHovered(false)}
         style={{
           ...(hasBanner ? {
-            background: `linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.65) 100%), url("${bannerUrl}") center / cover no-repeat`,
+            backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.65) 100%), url("${bannerUrl}")`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
           } : {
             background: `
               repeating-linear-gradient(
@@ -1323,6 +1343,38 @@ export default function SchoolProfile() {
               </div>
             </div>
           </div>
+
+          {/* Find Campus Photo button — shown when no banner image */}
+          {!hasBanner && (
+            <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
+              <button
+                onClick={handleFindImage}
+                disabled={findingImage}
+                style={{
+                  background: 'rgba(0,0,0,0.4)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  borderRadius: '8px',
+                  padding: '0.55rem 1.25rem',
+                  cursor: findingImage ? 'default' : 'pointer',
+                  color: 'rgba(245,240,232,0.8)',
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontSize: '0.82rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  backdropFilter: 'blur(4px)',
+                  transition: 'background 0.15s, border-color 0.15s',
+                }}
+                onMouseEnter={(e) => { if (!findingImage) e.currentTarget.style.background = 'rgba(0,0,0,0.55)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.4)'; }}
+              >
+                {findingImage
+                  ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Finding photo…</>
+                  : <><Camera size={13} /> Find Campus Photo</>
+                }
+              </button>
+            </div>
+          )}
 
           {/* Photo credit */}
           {hasBanner && school.images?.banner?.source && school.images.banner.source !== 'Manual Upload' && (
