@@ -1252,28 +1252,54 @@ export default function SchoolProfile() {
               <ChevronLeft size={15} /> Back to list
             </Link>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <button
-                onClick={() => bannerInputRef.current?.click()}
-                disabled={uploading}
-                title="Update banner photo"
-                style={{
-                  background: 'rgba(0,0,0,0.35)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  borderRadius: '6px',
-                  padding: '6px',
-                  cursor: uploading ? 'default' : 'pointer',
-                  color: 'rgba(245,240,232,0.7)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  backdropFilter: 'blur(4px)',
-                  opacity: heroHovered ? 1 : 0.3,
-                  transition: 'opacity 0.2s',
-                }}
-              >
-                {uploading
-                  ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                  : <Camera size={14} />}
-              </button>
+              {!hasBanner ? (
+                <button
+                  onClick={handleFindImage}
+                  disabled={findingImage}
+                  title="Find campus photo"
+                  style={{
+                    background: 'rgba(0,0,0,0.35)',
+                    border: '1px solid rgba(255,255,255,0.22)',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    cursor: findingImage ? 'default' : 'pointer',
+                    color: 'rgba(245,240,232,0.85)',
+                    fontFamily: "'DM Sans', sans-serif",
+                    fontSize: '12px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    backdropFilter: 'blur(4px)',
+                  }}
+                >
+                  {findingImage
+                    ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Finding…</>
+                    : <><Camera size={13} /> Find Photo</>}
+                </button>
+              ) : (
+                <button
+                  onClick={() => bannerInputRef.current?.click()}
+                  disabled={uploading}
+                  title="Replace banner photo"
+                  style={{
+                    background: 'rgba(0,0,0,0.35)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: '6px',
+                    padding: '6px',
+                    cursor: uploading ? 'default' : 'pointer',
+                    color: 'rgba(245,240,232,0.7)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    backdropFilter: 'blur(4px)',
+                    opacity: heroHovered ? 1 : 0.3,
+                    transition: 'opacity 0.2s',
+                  }}
+                >
+                  {uploading
+                    ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                    : <Camera size={14} />}
+                </button>
+              )}
               <button
                 onClick={() => setShowArchiveModal(true)}
                 style={{
@@ -1343,38 +1369,6 @@ export default function SchoolProfile() {
               </div>
             </div>
           </div>
-
-          {/* Find Campus Photo button — shown when no banner image */}
-          {!hasBanner && (
-            <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
-              <button
-                onClick={handleFindImage}
-                disabled={findingImage}
-                style={{
-                  background: 'rgba(0,0,0,0.4)',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  borderRadius: '8px',
-                  padding: '0.55rem 1.25rem',
-                  cursor: findingImage ? 'default' : 'pointer',
-                  color: 'rgba(245,240,232,0.8)',
-                  fontFamily: "'DM Sans', sans-serif",
-                  fontSize: '0.82rem',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  backdropFilter: 'blur(4px)',
-                  transition: 'background 0.15s, border-color 0.15s',
-                }}
-                onMouseEnter={(e) => { if (!findingImage) e.currentTarget.style.background = 'rgba(0,0,0,0.55)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.4)'; }}
-              >
-                {findingImage
-                  ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Finding photo…</>
-                  : <><Camera size={13} /> Find Campus Photo</>
-                }
-              </button>
-            </div>
-          )}
 
           {/* Photo credit */}
           {hasBanner && school.images?.banner?.source && school.images.banner.source !== 'Manual Upload' && (
