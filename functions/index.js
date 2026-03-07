@@ -55,32 +55,42 @@ exports.generateSchoolProfile = onCall(
         logger.info("Using default prompts from prompts.js");
       }
 
-      // Call Claude with web search
+      // Multi-turn loop: web search returns pause_turn with no text on first pass
       const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
-      const response = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 16000,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userPrompt }],
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-      });
+      const messages = [{ role: "user", content: userPrompt }];
+      const allTextBlocks = [];
+      const MAX_ITER = 15;
+      let lastResponse;
 
-      // Log content block summary to help debug parsing issues
-      const blockSummary = response.content.map((b) => ({
-        type: b.type,
-        len: b.type === "text" ? b.text.length : undefined,
-      }));
-      logger.info("Claude response blocks", {
-        stopReason: response.stop_reason,
-        blockCount: response.content.length,
-        blocks: blockSummary,
-      });
+      for (let iter = 0; iter < MAX_ITER; iter++) {
+        lastResponse = await client.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 16000,
+          system: systemPrompt,
+          messages,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        });
 
-      // Concatenate ALL text blocks (web search may interleave tool_use/tool_result blocks)
-      const rawText = response.content
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("");
+        const textBlocks = lastResponse.content.filter((b) => b.type === "text");
+        allTextBlocks.push(...textBlocks);
+
+        logger.info("generateSchoolProfile iteration", {
+          iter,
+          stopReason: lastResponse.stop_reason,
+          blockCount: lastResponse.content.length,
+          blockTypes: lastResponse.content.map((b) => b.type),
+          textLength: textBlocks.reduce((s, b) => s + b.text.length, 0),
+        });
+
+        if (lastResponse.stop_reason === "end_turn") break;
+
+        // pause_turn or tool_use: push assistant turn and prompt Claude to continue
+        messages.push({ role: "assistant", content: lastResponse.content });
+        messages.push({ role: "user", content: [{ type: "text", text: "Please continue with your research and provide the complete JSON profile." }] });
+      }
+
+      // Concatenate ALL text blocks accumulated across all iterations
+      const rawText = allTextBlocks.map((b) => b.text).join("");
 
       // Strip markdown code fences if present
       const stripped = rawText
@@ -312,18 +322,37 @@ RULES:
     ];
 
     try {
-      const response = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4000,
-        system: systemPrompt,
-        messages,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-      });
+      // Multi-turn loop: web search may return pause_turn with no text on first pass
+      const allTextBlocks = [];
+      const MAX_ITER = 10;
 
-      const fullText = response.content
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("");
+      for (let iter = 0; iter < MAX_ITER; iter++) {
+        const response = await client.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          system: systemPrompt,
+          messages,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        });
+
+        const textBlocks = response.content.filter((b) => b.type === "text");
+        allTextBlocks.push(...textBlocks);
+
+        logger.info("chatWithClaire iteration", {
+          iter,
+          stopReason: response.stop_reason,
+          blockCount: response.content.length,
+          blockTypes: response.content.map((b) => b.type),
+          textLength: textBlocks.reduce((s, b) => s + b.text.length, 0),
+        });
+
+        if (response.stop_reason === "end_turn") break;
+
+        messages.push({ role: "assistant", content: response.content });
+        messages.push({ role: "user", content: [{ type: "text", text: "Please continue." }] });
+      }
+
+      const fullText = allTextBlocks.map((b) => b.text).join("");
 
       // 6. Parse [SUGGEST_UPDATE: ...] patterns
       const suggestedUpdates = [];
@@ -430,19 +459,38 @@ exports.generateMetric = onCall(
         .replace(/\{\{metricDescription\}\}/g, metricDescription);
 
       try {
-        const response = await client.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 800,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        });
+        // Multi-turn loop: web search may return pause_turn with no text on first pass
+        const metricMessages = [{ role: "user", content: userPrompt }];
+        const allTextBlocks = [];
+        const MAX_ITER = 10;
 
-        const rawText = response.content
-          .filter((b) => b.type === "text")
-          .map((b) => b.text)
-          .join("")
-          .trim();
+        for (let iter = 0; iter < MAX_ITER; iter++) {
+          const response = await client.messages.create({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 800,
+            system: systemPrompt,
+            messages: metricMessages,
+            tools: [{ type: "web_search_20250305", name: "web_search" }],
+          });
+
+          const textBlocks = response.content.filter((b) => b.type === "text");
+          allTextBlocks.push(...textBlocks);
+
+          logger.info("generateMetric school iteration", {
+            schoolId: school.id,
+            iter,
+            stopReason: response.stop_reason,
+            blockTypes: response.content.map((b) => b.type),
+            textLength: textBlocks.reduce((s, b) => s + b.text.length, 0),
+          });
+
+          if (response.stop_reason === "end_turn") break;
+
+          metricMessages.push({ role: "assistant", content: response.content });
+          metricMessages.push({ role: "user", content: [{ type: "text", text: "Please provide the JSON result." }] });
+        }
+
+        const rawText = allTextBlocks.map((b) => b.text).join("").trim();
 
         // Parse JSON — strip fences, find { ... }
         const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
