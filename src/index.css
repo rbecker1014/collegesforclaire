@@ -87,6 +87,16 @@ a {
   display: none;
 }
 
+/* Photo gallery row */
+.photo-gallery-row {
+  display: flex;
+  flex-direction: row;
+}
+
+.photo-gallery-item {
+  min-width: 0;
+}
+
 @media (max-width: 768px) {
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -96,5 +106,13 @@ a {
   .fit-pros-cons,
   .nursing-grid {
     grid-template-columns: 1fr;
+  }
+  .photo-gallery-row {
+    flex-direction: column;
+  }
+  .photo-gallery-item {
+    width: 100% !important;
+    flex: none !important;
+    max-width: none !important;
   }
 }

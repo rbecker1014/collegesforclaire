@@ -1,16 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Check, X, Pencil, Archive, RefreshCw } from 'lucide-react';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { ChevronLeft, Check, X, Pencil, Archive } from 'lucide-react';
+import { doc, updateDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import NavBar from '../components/NavBar';
 import SourceCite from '../components/SourceCite';
-import PhotoPickerModal from '../components/PhotoPickerModal';
 import { useSchool } from '../hooks/useSchool';
 import { useNotes, addNote, editNote, deleteNote } from '../hooks/useNotes';
 import { useAuth } from '../contexts/AuthContext';
 import { timeAgo } from '../utils/timeAgo';
-import { db, functions } from '../firebase';
+import { db, storage } from '../firebase';
 
 // ─── Shared input style ────────────────────────────────────────────────────────
 
@@ -351,9 +350,17 @@ function ProConList({ items = [], fieldPath, onFieldSave, color, isPro }) {
 
 // ─── Tab: Overview ─────────────────────────────────────────────────────────────
 
-function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos, onDeletePhoto }) {
+function OverviewTab({ school, onFieldSave, onAddPhotoUrl, onUploadPhoto, onDeletePhoto }) {
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
-  const [hoveredPhotoIdx, setHoveredPhotoIdx] = useState(null);
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(null);
+  // add-photo UI
+  const [addMode, setAddMode] = useState(null); // null | 'url' | 'upload'
+  const [urlInput, setUrlInput] = useState('');
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [previewOk, setPreviewOk] = useState(null); // null | true | false
+  const [addingUrl, setAddingUrl] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(false);
+  const uploadInputRef = useRef(null);
 
   if (!school) return null;
   const o = school.overview;
@@ -373,7 +380,154 @@ function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos, onDelet
     { label: '4-Year Grad Rate', data: o?.fourYearGradRate },
   ];
 
-  const gallery = school.images?.gallery;
+  const gallery = school.images?.gallery || [];
+  const canAddMore = gallery.length < 3;
+
+  const cancelAdd = () => {
+    setAddMode(null);
+    setUrlInput('');
+    setPreviewUrl('');
+    setPreviewOk(null);
+  };
+
+  const handlePreview = () => {
+    const url = urlInput.trim();
+    if (!url) return;
+    setPreviewUrl(url);
+    setPreviewOk(null);
+  };
+
+  const handleAddUrl = async () => {
+    if (!previewOk || !previewUrl) return;
+    setAddingUrl(true);
+    await onAddPhotoUrl(previewUrl);
+    setAddingUrl(false);
+    cancelAdd();
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image must be under 5MB.');
+      return;
+    }
+    setUploadProgress(true);
+    await onUploadPhoto(file);
+    setUploadProgress(false);
+    setAddMode(null);
+  };
+
+  // shared small button style
+  const ghostBtn = (extra = {}) => ({
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: '6px',
+    padding: '0.45rem 1rem',
+    color: 'rgba(245,240,232,0.7)',
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: '0.8rem',
+    cursor: 'pointer',
+    ...extra,
+  });
+
+  const photoHeight = gallery.length === 1 ? '220px' : gallery.length === 2 ? '200px' : '180px';
+
+  // ── Add-photo inline form ──────────────────────────────────────────────────
+  const AddPhotoForm = (
+    <div style={{ marginTop: '0.75rem' }}>
+      {addMode === null && canAddMore && (
+        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <button style={ghostBtn()} onClick={() => setAddMode('url')}>Paste URL</button>
+          <button
+            style={ghostBtn()}
+            onClick={() => { setAddMode('upload'); setTimeout(() => uploadInputRef.current?.click(), 0); }}
+          >
+            Upload Photo
+          </button>
+        </div>
+      )}
+
+      {addMode === 'url' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handlePreview()}
+              placeholder="Paste an image URL (e.g., from Google Images)"
+              autoFocus
+              style={{
+                flex: 1, minWidth: '200px',
+                background: '#1A1A1A', border: '1px solid rgba(255,255,255,0.12)',
+                color: '#f5f0e8', borderRadius: '6px', padding: '0.45rem 0.75rem',
+                fontFamily: "'DM Sans', sans-serif", fontSize: '0.82rem', outline: 'none',
+              }}
+            />
+            <button style={ghostBtn()} onClick={handlePreview} disabled={!urlInput.trim()}>
+              Preview
+            </button>
+            <button
+              onClick={cancelAdd}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(245,240,232,0.35)', fontFamily: "'DM Sans', sans-serif", fontSize: '0.8rem' }}
+            >
+              Cancel
+            </button>
+          </div>
+
+          {previewUrl && (
+            <div>
+              <img
+                src={previewUrl}
+                alt="preview"
+                onLoad={() => setPreviewOk(true)}
+                onError={() => setPreviewOk(false)}
+                style={{
+                  display: previewOk === false ? 'none' : 'block',
+                  maxHeight: '200px', maxWidth: '100%',
+                  objectFit: 'contain', borderRadius: '6px',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                }}
+              />
+              {previewOk === false && (
+                <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.8rem', color: '#f87171', margin: 0 }}>
+                  Could not load this URL. Try a different one.
+                </p>
+              )}
+              {previewOk && (
+                <button
+                  onClick={handleAddUrl}
+                  disabled={addingUrl}
+                  style={{
+                    ...ghostBtn({ marginTop: '0.5rem' }),
+                    background: '#6fcf97', color: '#000', border: 'none', fontWeight: 600,
+                    opacity: addingUrl ? 0.6 : 1,
+                  }}
+                >
+                  {addingUrl ? 'Adding…' : 'Add to Gallery'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {addMode === 'upload' && uploadProgress && (
+        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.82rem', color: 'rgba(245,240,232,0.5)', margin: 0 }}>
+          Uploading…
+        </p>
+      )}
+
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
+    </div>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -421,139 +575,114 @@ function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos, onDelet
       </div>
 
       {/* Photo Gallery */}
-      {gallery && gallery.length > 0 ? (
+      {gallery.length > 0 ? (
         <div>
-          <div style={{
-            display: 'flex',
-            gap: '0.75rem',
-            justifyContent: gallery.length === 1 ? 'center' : 'stretch',
-          }}>
+          {/* Photo row — stacks vertically on mobile via class */}
+          <div className="photo-gallery-row" style={{ gap: '0.75rem' }}>
             {gallery.map((photo, idx) => (
               <div
                 key={idx}
+                className="photo-gallery-item"
                 style={{
                   flex: gallery.length === 1 ? '0 0 auto' : 1,
-                  width: gallery.length === 1 ? '100%' : undefined,
                   maxWidth: gallery.length === 1 ? '600px' : undefined,
                   borderRadius: '8px',
                   overflow: 'hidden',
                   position: 'relative',
+                  cursor: confirmDeleteIdx === idx ? 'default' : 'pointer',
                   transition: 'transform 0.2s, box-shadow 0.2s',
-                  cursor: 'pointer',
                 }}
                 onMouseEnter={(e) => {
-                  setHoveredPhotoIdx(idx);
-                  e.currentTarget.style.transform = 'scale(1.02)';
-                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
+                  if (confirmDeleteIdx !== idx) {
+                    e.currentTarget.style.transform = 'scale(1.02)';
+                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
+                  }
                 }}
                 onMouseLeave={(e) => {
-                  setHoveredPhotoIdx(null);
                   e.currentTarget.style.transform = '';
                   e.currentTarget.style.boxShadow = '';
                 }}
-                onClick={() => setLightboxPhoto(photo)}
+                onClick={() => confirmDeleteIdx === null && setLightboxPhoto(photo)}
               >
                 <img
                   src={photo.url}
-                  alt={photo.caption}
-                  style={{
-                    width: '100%',
-                    height: gallery.length === 1 ? '250px' : '200px',
-                    objectFit: 'cover',
-                    display: 'block',
-                  }}
+                  alt={photo.caption || 'Campus photo'}
+                  style={{ width: '100%', height: photoHeight, objectFit: 'cover', display: 'block' }}
                 />
-                {/* Delete button — visible on hover */}
-                {hoveredPhotoIdx === idx && (
+
+                {/* Delete confirmation overlay */}
+                {confirmDeleteIdx === idx ? (
+                  <div style={{
+                    position: 'absolute', inset: 0,
+                    background: 'rgba(0,0,0,0.72)',
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center', gap: '0.6rem',
+                  }}>
+                    <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.82rem', color: '#f5f0e8' }}>
+                      Remove this photo?
+                    </span>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDeletePhoto(idx); setConfirmDeleteIdx(null); }}
+                        style={{ background: '#ef4444', border: 'none', borderRadius: '5px', padding: '0.3rem 0.8rem', color: '#fff', fontFamily: "'DM Sans', sans-serif", fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        Yes, remove
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteIdx(null); }}
+                        style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '5px', padding: '0.3rem 0.8rem', color: '#f5f0e8', fontFamily: "'DM Sans', sans-serif", fontSize: '0.8rem', cursor: 'pointer' }}
+                      >
+                        No
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* X button — always visible, top-right */
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDeletePhoto(idx); }}
+                    onClick={(e) => { e.stopPropagation(); setConfirmDeleteIdx(idx); }}
                     style={{
                       position: 'absolute', top: '6px', right: '6px',
-                      background: 'rgba(0,0,0,0.65)', border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: '50%', width: '26px', height: '26px',
+                      background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: '50%', width: '24px', height: '24px',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'pointer', color: '#f5f0e8',
+                      cursor: 'pointer', color: '#f5f0e8', opacity: 0.7,
+                      transition: 'opacity 0.15s',
                     }}
-                    title="Remove from gallery"
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.7')}
+                    title="Remove photo"
                   >
-                    <X size={13} />
+                    <X size={12} />
                   </button>
                 )}
-                <div style={{
-                  padding: '0.4rem 0.6rem',
-                  background: 'rgba(255,255,255,0.03)',
-                  fontSize: '11px',
-                  color: 'rgba(245,240,232,0.4)',
-                  fontFamily: "'DM Sans', sans-serif",
-                  lineHeight: 1.3,
-                }}>
-                  {photo.caption}
-                </div>
+
+                {photo.caption && (
+                  <div style={{
+                    padding: '0.35rem 0.6rem',
+                    background: 'rgba(255,255,255,0.03)',
+                    fontSize: '11px', color: 'rgba(245,240,232,0.38)',
+                    fontFamily: "'DM Sans', sans-serif", lineHeight: 1.3,
+                  }}>
+                    {photo.caption}
+                  </div>
+                )}
               </div>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-            {gallery.length < 3 && (
-              <button
-                onClick={onFindPhotos}
-                disabled={findingPhotos}
-                style={{
-                  background: 'none', border: 'none', padding: 0,
-                  cursor: findingPhotos ? 'default' : 'pointer',
-                  fontSize: '11px', color: 'rgba(245,240,232,0.35)',
-                  fontFamily: "'DM Sans', sans-serif", textDecoration: 'underline',
-                }}
-              >
-                {findingPhotos ? 'Finding photos…' : 'Add More Photos'}
-              </button>
-            )}
-            <button
-              onClick={onFindPhotos}
-              disabled={findingPhotos}
-              style={{
-                background: 'none', border: 'none', padding: 0,
-                cursor: findingPhotos ? 'default' : 'pointer',
-                fontSize: '11px', color: 'rgba(245,240,232,0.25)',
-                fontFamily: "'DM Sans', sans-serif", textDecoration: 'underline',
-              }}
-            >
-              {findingPhotos ? 'Finding photos…' : 'Update Photos'}
-            </button>
-          </div>
+          {AddPhotoForm}
         </div>
       ) : (
+        /* Empty state */
         <div style={{
           border: '1px dashed rgba(255,255,255,0.12)',
           borderRadius: '10px',
-          padding: '2rem',
+          padding: '2rem 1.5rem',
           textAlign: 'center',
         }}>
-          <button
-            onClick={onFindPhotos}
-            disabled={findingPhotos}
-            style={{
-              background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '6px',
-              padding: '0.6rem 1.2rem',
-              color: 'rgba(245,240,232,0.7)',
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: '0.875rem',
-              cursor: findingPhotos ? 'default' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
-          >
-            {findingPhotos ? (
-              <>
-                <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                Finding campus photos for {school.name}…
-              </>
-            ) : (
-              'Find Campus Photos'
-            )}
-          </button>
+          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.88rem', color: 'rgba(245,240,232,0.4)', margin: '0 0 1rem' }}>
+            Add campus photos
+          </p>
+          {AddPhotoForm}
         </div>
       )}
 
@@ -583,7 +712,7 @@ function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos, onDelet
         >
           <img
             src={lightboxPhoto.url}
-            alt={lightboxPhoto.caption}
+            alt={lightboxPhoto.caption || 'Campus photo'}
             onClick={(e) => e.stopPropagation()}
             style={{ maxWidth: '100%', maxHeight: '85vh', objectFit: 'contain', borderRadius: '8px', cursor: 'default' }}
           />
@@ -1191,10 +1320,7 @@ export default function SchoolProfile() {
   const [archiveReason, setArchiveReason] = useState('');
   const [archiving, setArchiving] = useState(false);
 
-  // Photo gallery state
-  const [findingPhotos, setFindingPhotos] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [candidates, setCandidates] = useState([]);
+  // (photo gallery state is managed inside OverviewTab)
 
   if (loading || !school) {
     if (!loading && !school) {
@@ -1261,23 +1387,42 @@ export default function SchoolProfile() {
     setVideoEditing(false);
   };
 
-  const handleDeletePhoto = async (idx) => {
-    const current = school.images?.gallery || [];
-    const updated = current.filter((_, i) => i !== idx);
-    await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': updated });
+  const handleAddPhotoUrl = async (url) => {
+    const entry = {
+      url,
+      caption: '',
+      source: 'URL',
+      addedBy: user?.displayName ?? 'Unknown',
+      addedAt: serverTimestamp(),
+    };
+    await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': arrayUnion(entry) });
   };
 
-  const handleFindPhotos = async () => {
-    setFindingPhotos(true);
-    try {
-      const fn = httpsCallable(functions, 'backfillSchoolImages', { timeout: 180000 });
-      const result = await fn({ schoolId: school.id, schoolName: school.name });
-      setCandidates(result.data.candidates || []);
-      setPickerOpen(true);
-    } catch (err) {
-      console.error('Failed to find photos:', err);
-    } finally {
-      setFindingPhotos(false);
+  const handleUploadPhoto = async (file) => {
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z]/g, '') || 'jpg';
+    const timestamp = Date.now();
+    const path = `schools/${school.id}/photos/${timestamp}.${ext}`;
+    const fileRef = storageRef(storage, path);
+    await uploadBytes(fileRef, file);
+    const downloadURL = await getDownloadURL(fileRef);
+    const entry = {
+      url: downloadURL,
+      caption: '',
+      source: 'Uploaded',
+      storagePath: path,
+      addedBy: user?.displayName ?? 'Unknown',
+      addedAt: serverTimestamp(),
+    };
+    await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': arrayUnion(entry) });
+  };
+
+  const handleDeletePhoto = async (idx) => {
+    const current = school.images?.gallery || [];
+    const photo = current[idx];
+    const updated = current.filter((_, i) => i !== idx);
+    await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': updated });
+    if (photo?.storagePath) {
+      try { await deleteObject(storageRef(storage, photo.storagePath)); } catch (_) {}
     }
   };
 
@@ -1452,7 +1597,7 @@ export default function SchoolProfile() {
           ))}
         </div>
 
-        {activeTab === 'overview' && <OverviewTab school={school} onFieldSave={handleFieldSave} onFindPhotos={handleFindPhotos} findingPhotos={findingPhotos} onDeletePhoto={handleDeletePhoto} />}
+        {activeTab === 'overview' && <OverviewTab school={school} onFieldSave={handleFieldSave} onAddPhotoUrl={handleAddPhotoUrl} onUploadPhoto={handleUploadPhoto} onDeletePhoto={handleDeletePhoto} />}
         {activeTab === 'nursing' && <NursingTab school={school} onFieldSave={handleFieldSave} />}
         {activeTab === 'campusLife' && <CampusLifeTab school={school} />}
         {activeTab === 'clairesFit' && <ClairesFitTab school={school} onFieldSave={handleFieldSave} />}
@@ -1597,16 +1742,6 @@ export default function SchoolProfile() {
           </div>
         )}
       </div>
-
-      {/* ── Photo picker modal ── */}
-      {pickerOpen && candidates.length > 0 && (
-        <PhotoPickerModal
-          schoolId={school.id}
-          candidates={candidates}
-          onClose={() => setPickerOpen(false)}
-          onSaved={() => setPickerOpen(false)}
-        />
-      )}
 
       {/* ── Archive modal ── */}
       {showArchiveModal && (
