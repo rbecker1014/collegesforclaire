@@ -1023,6 +1023,7 @@ export default function SchoolProfile() {
   const [uploading, setUploading] = useState(false);
   const [uploadToast, setUploadToast] = useState(false);
   const [findingImage, setFindingImage] = useState(false);
+  const [findImageError, setFindImageError] = useState('');
   const bannerInputRef = useRef(null);
 
   useEffect(() => {
@@ -1137,14 +1138,14 @@ export default function SchoolProfile() {
 
   const handleFindImage = async () => {
     setFindingImage(true);
+    setFindImageError('');
     try {
       const fn = httpsCallable(functions, 'backfillSchoolImage', { timeout: 120000 });
       await fn({ schoolId: school.id, schoolName: school.name });
-      // onSnapshot will update the UI automatically
       setUploadToast(true);
       setTimeout(() => setUploadToast(false), 3000);
     } catch (err) {
-      alert('Could not find image: ' + err.message);
+      setFindImageError(err.message || 'Could not find image');
     } finally {
       setFindingImage(false);
     }
@@ -1253,29 +1254,36 @@ export default function SchoolProfile() {
             </Link>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               {!hasBanner ? (
-                <button
-                  onClick={handleFindImage}
-                  disabled={findingImage}
-                  title="Find campus photo"
-                  style={{
-                    background: 'rgba(0,0,0,0.35)',
-                    border: '1px solid rgba(255,255,255,0.22)',
-                    borderRadius: '6px',
-                    padding: '6px 10px',
-                    cursor: findingImage ? 'default' : 'pointer',
-                    color: 'rgba(245,240,232,0.85)',
-                    fontFamily: "'DM Sans', sans-serif",
-                    fontSize: '12px',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.35rem',
-                    backdropFilter: 'blur(4px)',
-                  }}
-                >
-                  {findingImage
-                    ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Finding…</>
-                    : <><Camera size={13} /> Find Photo</>}
-                </button>
+                <>
+                  <button
+                    onClick={handleFindImage}
+                    disabled={findingImage}
+                    title="Find campus photo"
+                    style={{
+                      background: 'rgba(0,0,0,0.35)',
+                      border: '1px solid rgba(255,255,255,0.22)',
+                      borderRadius: '6px',
+                      padding: '6px 10px',
+                      cursor: findingImage ? 'default' : 'pointer',
+                      color: 'rgba(245,240,232,0.85)',
+                      fontFamily: "'DM Sans', sans-serif",
+                      fontSize: '12px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      backdropFilter: 'blur(4px)',
+                    }}
+                  >
+                    {findingImage
+                      ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Finding…</>
+                      : <><Camera size={13} /> Find Photo</>}
+                  </button>
+                  {findImageError && (
+                    <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '11px', color: '#f87171', maxWidth: '160px', lineHeight: 1.3 }}>
+                      {findImageError}
+                    </span>
+                  )}
+                </>
               ) : (
                 <button
                   onClick={() => bannerInputRef.current?.click()}
