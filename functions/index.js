@@ -659,14 +659,17 @@ exports.backfillSchoolImages = onCall(
     // ── Step 1: Multi-turn web search to gather photo URLs ───────────────────
     const messages = [{
       role: "user",
-      content: `Search the web and find 6 different direct image URLs showing ${schoolName}'s campus. Search for:
-- The school's official website homepage (look for og:image)
-- "${schoolName} campus photo" on their admissions page
-- "${schoolName}" on Wikimedia Commons for campus images
-- "${schoolName} aerial campus"
-- "${schoolName} campus buildings"
+      content: `Search the web and find 8-10 direct image URLs showing ${schoolName}'s campus. Do multiple searches:
 
-List every direct image URL you find (.jpg, .jpeg, .png, .webp). Include the URL, a brief description of what's in the photo, and the source website name.`,
+1. Search "${schoolName} campus" and look for image URLs in results
+2. Visit the school's official admissions page and look for image URLs
+3. Search "site:commons.wikimedia.org ${schoolName}" for Wikimedia Commons images
+4. Search "${schoolName} campus aerial photo"
+5. Search "${schoolName} university buildings"
+
+For each image you find, provide the COMPLETE direct image URL (must end in .jpg, .jpeg, .png, .webp or be from an image CDN like cloudinary, imgix, amazonaws, etc.). Include a brief description and source.
+
+I need at least 8 image URLs. Keep searching until you have them.`,
     }];
 
     const allTextBlocks = [];
@@ -716,7 +719,7 @@ List every direct image URL you find (.jpg, .jpeg, .png, .webp). Include the URL
       system: "You extract image URLs from research notes and return ONLY valid JSON. No markdown, no explanation, no code fences.",
       messages: [{
         role: "user",
-        content: `From this research about ${schoolName} campus photos, extract all direct image URLs (ending in .jpg, .jpeg, .png, .webp, or containing image CDN paths) and format as a JSON array.
+        content: `From this research about ${schoolName} campus photos, extract all direct image URLs and format as a JSON array.
 
 Research notes:
 ${researchText}
@@ -726,8 +729,9 @@ Return ONLY this JSON array (absolutely nothing else before or after):
 
 Rules:
 - Only include URLs that start with http:// or https://
-- Only include URLs that are direct image links (not HTML pages)
-- Include up to 6 URLs
+- Only include URLs that point to image files (ending in .jpg, .jpeg, .png, .webp, .gif) OR from known image CDNs (amazonaws.com, cloudinary.com, imgix.net, fastly.net, wp.com, squarespace-cdn.com, etc.)
+- Do NOT include URLs that are clearly HTML pages (ending in .html, .php, .asp, or just a domain/path with no image extension)
+- Include up to 8 URLs
 - If you find no valid image URLs, return: []`,
       }],
     });
@@ -766,7 +770,7 @@ Rules:
       urls: photoList.map((p) => p.url),
     });
 
-    // ── Step 3: Download each URL with validation and logging ────────────────
+    // ── Step 3: Download each URL with validation, timeout, and logging ──────
     const FETCH_HEADERS = {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept": "image/*, */*",
@@ -777,6 +781,30 @@ Rules:
       if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
       if (url.startsWith("data:") || url.startsWith("blob:")) return false;
       return true;
+    }
+
+    async function fetchWithTimeout(url, options, timeoutMs = 10000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function storeImageBuffer(imageBuffer, contentType, filePath) {
+      let bucketName;
+      try { bucketName = JSON.parse(process.env.FIREBASE_CONFIG || "{}").storageBucket; } catch {}
+      const bucket = admin.storage().bucket(bucketName);
+      const file = bucket.file(filePath);
+      const downloadToken = crypto.randomUUID();
+      await file.save(imageBuffer, {
+        contentType: contentType || "image/jpeg",
+        metadata: { metadata: { firebaseStorageDownloadTokens: downloadToken } },
+      });
+      const encodedPath = encodeURIComponent(filePath);
+      return `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
     }
 
     const candidates = [];
@@ -791,38 +819,36 @@ Rules:
 
       logger.info("backfillSchoolImages: attempting download", { schoolId, index: i, url: photo.url });
       try {
-        const resp = await fetch(photo.url, { headers: FETCH_HEADERS, redirect: "follow" });
+        const resp = await fetchWithTimeout(photo.url, { headers: FETCH_HEADERS, redirect: "follow" }, 10000);
+        const contentType = resp.headers.get("content-type") || "";
+
         logger.info("backfillSchoolImages: download response", {
           schoolId, index: i, url: photo.url,
-          status: resp.status, contentType: resp.headers.get("content-type"),
+          status: resp.status, contentType,
         });
 
         if (!resp.ok) {
-          logger.warn("backfillSchoolImages: download failed", { schoolId, index: i, url: photo.url, status: resp.status });
+          logger.warn("backfillSchoolImages: download failed non-ok", { schoolId, index: i, status: resp.status });
           continue;
         }
 
-        const contentType = resp.headers.get("content-type") || "";
-        if (!contentType.includes("image") && !contentType.includes("octet-stream")) {
-          logger.warn("backfillSchoolImages: not an image content-type", { schoolId, index: i, url: photo.url, contentType });
-          // Still try to store it — some CDNs serve images with generic content types
+        // Skip HTML pages — these are redirects to error/login pages, not images
+        if (contentType.startsWith("text/html") || contentType.startsWith("text/plain")) {
+          logger.warn("backfillSchoolImages: got HTML instead of image, skipping", { schoolId, index: i, contentType });
+          continue;
         }
 
         const imageBuffer = Buffer.from(await resp.arrayBuffer());
-        const ext = contentType.includes("png") ? "png" : "jpg";
 
-        let bucketName;
-        try { bucketName = JSON.parse(process.env.FIREBASE_CONFIG || "{}").storageBucket; } catch {}
-        const bucket = admin.storage().bucket(bucketName);
+        // Sanity check: valid images should be at least 5KB
+        if (imageBuffer.length < 5000) {
+          logger.warn("backfillSchoolImages: response too small to be an image", { schoolId, index: i, bytes: imageBuffer.length });
+          continue;
+        }
+
+        const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : contentType.includes("webp") ? "webp" : "jpg";
         const filePath = `schools/${schoolId}/photos/photo-${storageIndex}.${ext}`;
-        const file = bucket.file(filePath);
-        const downloadToken = crypto.randomUUID();
-        await file.save(imageBuffer, {
-          contentType: contentType || "image/jpeg",
-          metadata: { metadata: { firebaseStorageDownloadTokens: downloadToken } },
-        });
-        const encodedPath = encodeURIComponent(filePath);
-        const storageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
+        const storageUrl = await storeImageBuffer(imageBuffer, contentType || "image/jpeg", filePath);
 
         candidates.push({
           url: storageUrl,
@@ -831,17 +857,18 @@ Rules:
           selected: false,
         });
         storageIndex++;
-        logger.info("backfillSchoolImages: stored photo", { schoolId, storageIndex, filePath });
+        logger.info("backfillSchoolImages: stored photo", { schoolId, storageIndex, filePath, bytes: imageBuffer.length });
       } catch (err) {
         logger.warn("backfillSchoolImages: error downloading photo", { schoolId, index: i, url: photo.url, error: err.message });
       }
     }
 
-    // ── Step 4: og:image fallback if no candidates downloaded ───────────────
-    if (candidates.length === 0) {
-      logger.info("backfillSchoolImages: all downloads failed, trying og:image fallback", { schoolId });
+    // ── Step 4: og:image fallback when fewer than 3 candidates ──────────────
+    // Try the homepage and a few sub-pages to supplement whatever Claude found.
+    if (candidates.length < 3) {
+      logger.info("backfillSchoolImages: fewer than 3 photos, trying og:image fallback", { schoolId, have: candidates.length });
       try {
-        // Get official website URL from Claude (no web search needed)
+        // Get official website URL from Claude
         const siteResponse = await client.messages.create({
           model: "claude-sonnet-4-20250514",
           max_tokens: 100,
@@ -855,41 +882,55 @@ Rules:
         const websiteUrl = JSON.parse(siteStripped.slice(siteFirst, siteLast + 1)).url;
 
         if (websiteUrl && websiteUrl.startsWith("http")) {
-          logger.info("backfillSchoolImages: fetching homepage for og:image", { schoolId, websiteUrl });
-          const pageResp = await fetch(websiteUrl, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            },
-            redirect: "follow",
-          });
+          const base = new URL(websiteUrl);
+          // Try homepage, /admissions, /about — collect og:image from each
+          const pagesToTry = [
+            { url: websiteUrl, label: "homepage" },
+            { url: `${base.protocol}//${base.host}/admissions`, label: "admissions" },
+            { url: `${base.protocol}//${base.host}/about`, label: "about" },
+          ];
 
-          if (pageResp.ok) {
-            const html = await pageResp.text();
-            const ogMatch =
-              html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-              html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
-              html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
+          const ogHeaders = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,*/*",
+          };
 
-            if (ogMatch && ogMatch[1]) {
+          const seenOgUrls = new Set(candidates.map((c) => c.url));
+
+          for (const page of pagesToTry) {
+            if (candidates.length >= 6) break;
+            try {
+              logger.info("backfillSchoolImages: fetching page for og:image", { schoolId, url: page.url, label: page.label });
+              const pageResp = await fetchWithTimeout(page.url, { headers: ogHeaders, redirect: "follow" }, 10000);
+              if (!pageResp.ok) continue;
+
+              const html = await pageResp.text();
+              const ogMatch =
+                html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+                html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+                html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
+
+              if (!ogMatch || !ogMatch[1]) continue;
+
               let imageUrl = ogMatch[1].trim();
               if (imageUrl.startsWith("//")) imageUrl = "https:" + imageUrl;
-              else if (imageUrl.startsWith("/")) {
-                const base = new URL(websiteUrl);
-                imageUrl = `${base.protocol}//${base.host}${imageUrl}`;
-              }
+              else if (imageUrl.startsWith("/")) imageUrl = `${base.protocol}//${base.host}${imageUrl}`;
 
-              logger.info("backfillSchoolImages: found og:image", { schoolId, imageUrl });
+              if (!isValidImageUrl(imageUrl) || seenOgUrls.has(imageUrl)) continue;
+              seenOgUrls.add(imageUrl);
 
-              if (isValidImageUrl(imageUrl)) {
-                const storageUrl = await downloadAndStoreImage(imageUrl, `schools/${schoolId}/photos/photo-0`);
-                candidates.push({
-                  url: storageUrl,
-                  caption: `${schoolName} campus`,
-                  source: websiteUrl,
-                  selected: false,
-                });
-                logger.info("backfillSchoolImages: og:image fallback succeeded", { schoolId, storageUrl });
-              }
+              logger.info("backfillSchoolImages: found og:image", { schoolId, imageUrl, page: page.label });
+              const storageUrl = await downloadAndStoreImage(imageUrl, `schools/${schoolId}/photos/photo-${storageIndex}`);
+              candidates.push({
+                url: storageUrl,
+                caption: `${schoolName} — ${page.label}`,
+                source: websiteUrl,
+                selected: false,
+              });
+              storageIndex++;
+              logger.info("backfillSchoolImages: og:image stored", { schoolId, page: page.label, storageUrl });
+            } catch (pageErr) {
+              logger.warn("backfillSchoolImages: og:image page failed", { schoolId, page: page.url, error: pageErr.message });
             }
           }
         }

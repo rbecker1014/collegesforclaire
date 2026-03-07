@@ -6,17 +6,24 @@ import { db } from '../firebase';
 export default function PhotoPickerModal({ schoolId, candidates, onClose, onSaved }) {
   const [selected, setSelected] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [maxWarning, setMaxWarning] = useState(false);
 
   const toggle = (idx) => {
     if (selected.includes(idx)) {
       setSelected(selected.filter((i) => i !== idx));
-    } else if (selected.length < 3) {
+      setMaxWarning(false);
+    } else if (selected.length >= 3) {
+      setMaxWarning(true);
+    } else {
       setSelected([...selected, idx]);
+      setMaxWarning(false);
     }
   };
 
+  const canSave = selected.length >= 1 && selected.length <= 3;
+
   const handleSave = async () => {
-    if (selected.length !== 3) return;
+    if (!canSave) return;
     setSaving(true);
     try {
       const gallery = selected.map((idx) => ({ ...candidates[idx], selected: true }));
@@ -50,11 +57,16 @@ export default function PhotoPickerModal({ schoolId, candidates, onClose, onSave
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.1rem' }}>
           <div>
             <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '1rem', fontWeight: 700, color: '#f5f0e8' }}>
-              Select 3 photos for the gallery
+              Select up to 3 photos for the gallery
             </div>
             <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.8rem', color: 'rgba(245,240,232,0.4)', marginTop: '0.2rem' }}>
               {selected.length} of 3 selected
             </div>
+            {maxWarning && (
+              <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: '0.75rem', color: '#f87171', marginTop: '0.3rem' }}>
+                Maximum 3 photos. Deselect one first.
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -64,7 +76,7 @@ export default function PhotoPickerModal({ schoolId, candidates, onClose, onSave
           </button>
         </div>
 
-        {/* 2×3 grid */}
+        {/* Grid */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
@@ -73,18 +85,16 @@ export default function PhotoPickerModal({ schoolId, candidates, onClose, onSave
         }}>
           {candidates.map((photo, idx) => {
             const isSelected = selected.includes(idx);
-            const isDisabled = !isSelected && selected.length >= 3;
             return (
               <div
                 key={idx}
-                onClick={() => !isDisabled && toggle(idx)}
+                onClick={() => toggle(idx)}
                 style={{
-                  cursor: isDisabled ? 'default' : 'pointer',
+                  cursor: 'pointer',
                   borderRadius: '8px',
                   overflow: 'hidden',
                   border: isSelected ? '2px solid #6fcf97' : '2px solid rgba(255,255,255,0.08)',
-                  opacity: isDisabled ? 0.45 : 1,
-                  transition: 'border-color 0.15s, opacity 0.15s',
+                  transition: 'border-color 0.15s',
                 }}
               >
                 <div style={{ position: 'relative', height: '160px' }}>
@@ -137,14 +147,14 @@ export default function PhotoPickerModal({ schoolId, candidates, onClose, onSave
           </button>
           <button
             onClick={handleSave}
-            disabled={selected.length !== 3 || saving}
+            disabled={!canSave || saving}
             style={{
-              background: selected.length === 3 ? '#6fcf97' : 'rgba(111,207,151,0.15)',
-              color: selected.length === 3 ? '#000' : 'rgba(111,207,151,0.35)',
+              background: canSave ? '#6fcf97' : 'rgba(111,207,151,0.15)',
+              color: canSave ? '#000' : 'rgba(111,207,151,0.35)',
               border: 'none', borderRadius: '6px',
               padding: '0.5rem 1.25rem', fontFamily: "'DM Sans', sans-serif",
               fontSize: '0.875rem', fontWeight: 600,
-              cursor: selected.length === 3 && !saving ? 'pointer' : 'default',
+              cursor: canSave && !saving ? 'pointer' : 'default',
               transition: 'background 0.15s, color 0.15s',
             }}
           >

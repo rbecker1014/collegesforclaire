@@ -351,8 +351,9 @@ function ProConList({ items = [], fieldPath, onFieldSave, color, isPro }) {
 
 // ─── Tab: Overview ─────────────────────────────────────────────────────────────
 
-function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos }) {
+function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos, onDeletePhoto }) {
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
+  const [hoveredPhotoIdx, setHoveredPhotoIdx] = useState(null);
 
   if (!school) return null;
   const o = school.overview;
@@ -422,32 +423,62 @@ function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos }) {
       {/* Photo Gallery */}
       {gallery && gallery.length > 0 ? (
         <div>
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <div style={{
+            display: 'flex',
+            gap: '0.75rem',
+            justifyContent: gallery.length === 1 ? 'center' : 'stretch',
+          }}>
             {gallery.map((photo, idx) => (
               <div
                 key={idx}
-                onClick={() => setLightboxPhoto(photo)}
                 style={{
-                  flex: 1,
+                  flex: gallery.length === 1 ? '0 0 auto' : 1,
+                  width: gallery.length === 1 ? '100%' : undefined,
+                  maxWidth: gallery.length === 1 ? '600px' : undefined,
                   borderRadius: '8px',
                   overflow: 'hidden',
-                  cursor: 'pointer',
+                  position: 'relative',
                   transition: 'transform 0.2s, box-shadow 0.2s',
+                  cursor: 'pointer',
                 }}
                 onMouseEnter={(e) => {
+                  setHoveredPhotoIdx(idx);
                   e.currentTarget.style.transform = 'scale(1.02)';
                   e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
                 }}
                 onMouseLeave={(e) => {
+                  setHoveredPhotoIdx(null);
                   e.currentTarget.style.transform = '';
                   e.currentTarget.style.boxShadow = '';
                 }}
+                onClick={() => setLightboxPhoto(photo)}
               >
                 <img
                   src={photo.url}
                   alt={photo.caption}
-                  style={{ width: '100%', height: '200px', objectFit: 'cover', display: 'block' }}
+                  style={{
+                    width: '100%',
+                    height: gallery.length === 1 ? '250px' : '200px',
+                    objectFit: 'cover',
+                    display: 'block',
+                  }}
                 />
+                {/* Delete button — visible on hover */}
+                {hoveredPhotoIdx === idx && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeletePhoto(idx); }}
+                    style={{
+                      position: 'absolute', top: '6px', right: '6px',
+                      background: 'rgba(0,0,0,0.65)', border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: '50%', width: '26px', height: '26px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', color: '#f5f0e8',
+                    }}
+                    title="Remove from gallery"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
                 <div style={{
                   padding: '0.4rem 0.6rem',
                   background: 'rgba(255,255,255,0.03)',
@@ -461,19 +492,34 @@ function OverviewTab({ school, onFieldSave, onFindPhotos, findingPhotos }) {
               </div>
             ))}
           </div>
-          <button
-            onClick={onFindPhotos}
-            disabled={findingPhotos}
-            style={{
-              background: 'none', border: 'none', padding: 0,
-              cursor: findingPhotos ? 'default' : 'pointer',
-              fontSize: '11px', color: 'rgba(245,240,232,0.3)',
-              fontFamily: "'DM Sans', sans-serif",
-              marginTop: '0.5rem', textDecoration: 'underline',
-            }}
-          >
-            {findingPhotos ? 'Finding photos…' : 'Update Photos'}
-          </button>
+          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+            {gallery.length < 3 && (
+              <button
+                onClick={onFindPhotos}
+                disabled={findingPhotos}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  cursor: findingPhotos ? 'default' : 'pointer',
+                  fontSize: '11px', color: 'rgba(245,240,232,0.35)',
+                  fontFamily: "'DM Sans', sans-serif", textDecoration: 'underline',
+                }}
+              >
+                {findingPhotos ? 'Finding photos…' : 'Add More Photos'}
+              </button>
+            )}
+            <button
+              onClick={onFindPhotos}
+              disabled={findingPhotos}
+              style={{
+                background: 'none', border: 'none', padding: 0,
+                cursor: findingPhotos ? 'default' : 'pointer',
+                fontSize: '11px', color: 'rgba(245,240,232,0.25)',
+                fontFamily: "'DM Sans', sans-serif", textDecoration: 'underline',
+              }}
+            >
+              {findingPhotos ? 'Finding photos…' : 'Update Photos'}
+            </button>
+          </div>
         </div>
       ) : (
         <div style={{
@@ -1215,6 +1261,12 @@ export default function SchoolProfile() {
     setVideoEditing(false);
   };
 
+  const handleDeletePhoto = async (idx) => {
+    const current = school.images?.gallery || [];
+    const updated = current.filter((_, i) => i !== idx);
+    await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': updated });
+  };
+
   const handleFindPhotos = async () => {
     setFindingPhotos(true);
     try {
@@ -1400,7 +1452,7 @@ export default function SchoolProfile() {
           ))}
         </div>
 
-        {activeTab === 'overview' && <OverviewTab school={school} onFieldSave={handleFieldSave} onFindPhotos={handleFindPhotos} findingPhotos={findingPhotos} />}
+        {activeTab === 'overview' && <OverviewTab school={school} onFieldSave={handleFieldSave} onFindPhotos={handleFindPhotos} findingPhotos={findingPhotos} onDeletePhoto={handleDeletePhoto} />}
         {activeTab === 'nursing' && <NursingTab school={school} onFieldSave={handleFieldSave} />}
         {activeTab === 'campusLife' && <CampusLifeTab school={school} />}
         {activeTab === 'clairesFit' && <ClairesFitTab school={school} onFieldSave={handleFieldSave} />}
