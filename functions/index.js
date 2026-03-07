@@ -656,20 +656,43 @@ exports.backfillSchoolImages = onCall(
 
     const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
+    // ── Fetch already-known URLs to avoid duplicates ─────────────────────────
+    const schoolDoc = await db.collection("schools").doc(schoolId).get();
+    const schoolData = schoolDoc.exists ? schoolDoc.data() : {};
+    const existingUrls = [
+      ...(schoolData.images?.candidates || []).map((c) => c.url),
+      ...(schoolData.images?.gallery || []).map((g) => g.url),
+    ].filter(Boolean);
+
+    const avoidSection = existingUrls.length > 0
+      ? `\n\nDo NOT return any of these URLs — they were already found in a previous search:\n${existingUrls.map((u) => `- ${u}`).join("\n")}`
+      : "";
+
+    const searchTimestamp = Date.now();
+
     // ── Step 1: Multi-turn web search to gather photo URLs ───────────────────
     const messages = [{
       role: "user",
-      content: `Search the web and find 8-10 direct image URLs showing ${schoolName}'s campus. Do multiple searches:
+      content: `Search attempt #${searchTimestamp} — find campus photos of ${schoolName}. I need DIVERSE photos showing DIFFERENT aspects of campus.
 
-1. Search "${schoolName} campus" and look for image URLs in results
-2. Visit the school's official admissions page and look for image URLs
-3. Search "site:commons.wikimedia.org ${schoolName}" for Wikimedia Commons images
-4. Search "${schoolName} campus aerial photo"
-5. Search "${schoolName} university buildings"
+Find a direct image URL for EACH of these 8 specific categories (search separately for each):
 
-For each image you find, provide the COMPLETE direct image URL (must end in .jpg, .jpeg, .png, .webp or be from an image CDN like cloudinary, imgix, amazonaws, etc.). Include a brief description and source.
+1. AERIAL/OVERVIEW — aerial or wide shot showing the full campus layout. Search: "${schoolName} aerial campus photo"
+2. ICONIC BUILDING — the school's most recognizable or historic building. Search: "${schoolName} most famous building"
+3. STUDENT LIFE — students on campus walking, studying, or socializing. Search: "${schoolName} students campus"
+4. ATHLETICS/STADIUM — football stadium, basketball arena, or sports facility. Search: "${schoolName} stadium arena"
+5. LIBRARY/ACADEMICS — the main library or an impressive academic building. Search: "${schoolName} library"
+6. CAMPUS SCENERY — quad, gardens, fountain, or scenic campus view. Search: "${schoolName} campus quad fountain"
+7. DORMS/HOUSING — residence halls or student housing exterior. Search: "${schoolName} residence hall dorms"
+8. NURSING/HEALTH — nursing building, simulation lab, or health sciences facility. Search: "${schoolName} nursing school building"
 
-I need at least 8 image URLs. Keep searching until you have them.`,
+For each category, do a SEPARATE web search. Look for direct image URLs (ending in .jpg .jpeg .png .webp) from:
+- The school's official website and subpages (try /admissions, /about, /campus-life)
+- upload.wikimedia.org/wikipedia/commons/ (search site:commons.wikimedia.org "${schoolName}")
+- The school's official Flickr or social media pages
+- News articles or press photos of the campus
+
+Each URL must be from a DIFFERENT page or source — do not list multiple photos from the same page.${avoidSection}`,
     }];
 
     const allTextBlocks = [];
@@ -713,26 +736,33 @@ I need at least 8 image URLs. Keep searching until you have them.`,
     // ── Step 2: Separate no-tools call to extract URLs as clean JSON ─────────
     // This avoids the problem of web_search responses embedding JSON inside
     // natural language that confuses simple [ → ] extraction.
+    const avoidUrlSet = new Set(existingUrls);
+    const avoidJsonNote = avoidUrlSet.size > 0
+      ? `\n\nDo NOT include any of these already-known URLs:\n${[...avoidUrlSet].map((u) => `- ${u}`).join("\n")}`
+      : "";
+
     const formatResponse = await client.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 3000,
       system: "You extract image URLs from research notes and return ONLY valid JSON. No markdown, no explanation, no code fences.",
       messages: [{
         role: "user",
-        content: `From this research about ${schoolName} campus photos, extract all direct image URLs and format as a JSON array.
+        content: `From this research about ${schoolName} campus photos, extract 8 UNIQUE image URLs — each showing a DIFFERENT aspect of campus.
 
 Research notes:
 ${researchText}
 
 Return ONLY this JSON array (absolutely nothing else before or after):
-[{"url": "https://example.com/image.jpg", "caption": "brief description", "source": "source website name"}]
+[{"url": "https://example.com/image.jpg", "caption": "description of what's in the photo", "source": "source website name", "category": "one of: aerial, iconic-building, student-life, athletics, library, scenery, dorms, nursing"}]
 
 Rules:
 - Only include URLs that start with http:// or https://
-- Only include URLs that point to image files (ending in .jpg, .jpeg, .png, .webp, .gif) OR from known image CDNs (amazonaws.com, cloudinary.com, imgix.net, fastly.net, wp.com, squarespace-cdn.com, etc.)
-- Do NOT include URLs that are clearly HTML pages (ending in .html, .php, .asp, or just a domain/path with no image extension)
-- Include up to 8 URLs
-- If you find no valid image URLs, return: []`,
+- Only include URLs that point to actual photos (ending in .jpg, .jpeg, .png, .webp, .gif, OR from image CDNs: amazonaws.com, cloudinary.com, imgix.net, fastly.net, wp.com, squarespace-cdn.com, wikimedia.org)
+- Do NOT include logos, icons, headshots, social media profile images, or graphics — only campus/building/student photographs
+- Do NOT include URLs ending in .html, .php, .asp, or paths that are clearly HTML pages
+- Each URL must be from a DIFFERENT source/page
+- Include exactly ONE URL per category if possible; up to 8 total
+- If you find no valid image URLs, return: []${avoidJsonNote}`,
       }],
     });
 
@@ -809,6 +839,8 @@ Rules:
 
     const candidates = [];
     let storageIndex = 0;
+    // Deduplicate: skip URLs already stored in candidates or gallery (by original URL)
+    const seenDownloadUrls = new Set(existingUrls);
 
     for (let i = 0; i < photoList.length; i++) {
       const photo = photoList[i];
@@ -816,10 +848,15 @@ Rules:
         logger.warn("backfillSchoolImages: skipping invalid URL", { schoolId, index: i, url: photo.url });
         continue;
       }
+      if (seenDownloadUrls.has(photo.url)) {
+        logger.info("backfillSchoolImages: skipping duplicate URL", { schoolId, index: i, url: photo.url });
+        continue;
+      }
+      seenDownloadUrls.add(photo.url);
 
       logger.info("backfillSchoolImages: attempting download", { schoolId, index: i, url: photo.url });
       try {
-        const resp = await fetchWithTimeout(photo.url, { headers: FETCH_HEADERS, redirect: "follow" }, 10000);
+        const resp = await fetchWithTimeout(photo.url, { headers: FETCH_HEADERS, redirect: "follow" }, 15000);
         const contentType = resp.headers.get("content-type") || "";
 
         logger.info("backfillSchoolImages: download response", {
@@ -854,10 +891,11 @@ Rules:
           url: storageUrl,
           caption: photo.caption || "",
           source: photo.source || "",
+          category: photo.category || "",
           selected: false,
         });
         storageIndex++;
-        logger.info("backfillSchoolImages: stored photo", { schoolId, storageIndex, filePath, bytes: imageBuffer.length });
+        logger.info("backfillSchoolImages: stored photo", { schoolId, storageIndex, filePath, bytes: imageBuffer.length, category: photo.category });
       } catch (err) {
         logger.warn("backfillSchoolImages: error downloading photo", { schoolId, index: i, url: photo.url, error: err.message });
       }
@@ -901,7 +939,7 @@ Rules:
             if (candidates.length >= 6) break;
             try {
               logger.info("backfillSchoolImages: fetching page for og:image", { schoolId, url: page.url, label: page.label });
-              const pageResp = await fetchWithTimeout(page.url, { headers: ogHeaders, redirect: "follow" }, 10000);
+              const pageResp = await fetchWithTimeout(page.url, { headers: ogHeaders, redirect: "follow" }, 15000);
               if (!pageResp.ok) continue;
 
               const html = await pageResp.text();
