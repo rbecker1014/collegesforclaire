@@ -17,7 +17,11 @@ const db = admin.firestore();
  */
 async function downloadAndStoreImage(imageUrl, pathBase) {
   const imageResponse = await fetch(imageUrl, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; CollegesBot/1.0)" },
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "image/*, */*",
+    },
+    redirect: "follow",
   });
   if (!imageResponse.ok) {
     throw new Error(`Failed to download image: ${imageResponse.status} ${imageResponse.statusText}`);
@@ -652,17 +656,17 @@ exports.backfillSchoolImages = onCall(
 
     const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
-    // Ask Claude (with web search) to find 6 photo URLs
+    // ── Step 1: Multi-turn web search to gather photo URLs ───────────────────
     const messages = [{
       role: "user",
-      content: `Find 6 different high-quality photo URLs for ${schoolName}'s campus. Try these approaches:
-1. Fetch the school's official website and look for og:image meta tag
-2. Search for the school on their admissions or about page for campus photos
-3. Look for Wikimedia Commons images of the campus
+      content: `Search the web and find 6 different direct image URLs showing ${schoolName}'s campus. Search for:
+- The school's official website homepage (look for og:image)
+- "${schoolName} campus photo" on their admissions page
+- "${schoolName}" on Wikimedia Commons for campus images
+- "${schoolName} aerial campus"
+- "${schoolName} campus buildings"
 
-Return JSON array: [{"url": "direct image URL", "caption": "brief description of what's in the photo", "source": "source name"}]
-
-Include a mix of: aerial/campus overview, iconic building, student life/campus activity, athletics/stadium, library or academic building, campus green/scenery. URLs must be direct image links.`,
+List every direct image URL you find (.jpg, .jpeg, .png, .webp). Include the URL, a brief description of what's in the photo, and the source website name.`,
     }];
 
     const allTextBlocks = [];
@@ -671,8 +675,8 @@ Include a mix of: aerial/campus overview, iconic building, student life/campus a
     for (let iter = 0; iter < MAX_ITER; iter++) {
       const response = await client.messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 4000,
-        system: "You find campus photos for US universities. Return ONLY valid JSON, no markdown.",
+        max_tokens: 8000,
+        system: "You are a research assistant finding campus photos for US universities. Search thoroughly and report every direct image URL you find.",
         messages,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       });
@@ -680,59 +684,222 @@ Include a mix of: aerial/campus overview, iconic building, student life/campus a
       const textBlocks = response.content.filter((b) => b.type === "text");
       allTextBlocks.push(...textBlocks);
 
-      logger.info("backfillSchoolImages iteration", {
+      logger.info("backfillSchoolImages search iteration", {
         iter,
         stopReason: response.stop_reason,
         blockCount: response.content.length,
         textLength: textBlocks.reduce((s, b) => s + b.text.length, 0),
+        textPreview: textBlocks.map((b) => b.text.slice(0, 200)).join(" | "),
       });
 
       if (response.stop_reason === "end_turn") break;
 
       messages.push({ role: "assistant", content: response.content });
       if (response.stop_reason !== "pause_turn") {
-        messages.push({ role: "user", content: [{ type: "text", text: "Please provide the JSON array of 6 photos." }] });
+        messages.push({ role: "user", content: [{ type: "text", text: "Continue searching and list all image URLs you found." }] });
       }
     }
 
-    const rawText = allTextBlocks.map((b) => b.text).join("").trim();
-    const stripped = rawText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+    const researchText = allTextBlocks.map((b) => b.text).join("\n");
+    logger.info("backfillSchoolImages: research complete", {
+      schoolId,
+      researchLength: researchText.length,
+      researchPreview: researchText.slice(0, 1000),
+    });
 
+    // ── Step 2: Separate no-tools call to extract URLs as clean JSON ─────────
+    // This avoids the problem of web_search responses embedding JSON inside
+    // natural language that confuses simple [ → ] extraction.
+    const formatResponse = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 3000,
+      system: "You extract image URLs from research notes and return ONLY valid JSON. No markdown, no explanation, no code fences.",
+      messages: [{
+        role: "user",
+        content: `From this research about ${schoolName} campus photos, extract all direct image URLs (ending in .jpg, .jpeg, .png, .webp, or containing image CDN paths) and format as a JSON array.
+
+Research notes:
+${researchText}
+
+Return ONLY this JSON array (absolutely nothing else before or after):
+[{"url": "https://example.com/image.jpg", "caption": "brief description", "source": "source website name"}]
+
+Rules:
+- Only include URLs that start with http:// or https://
+- Only include URLs that are direct image links (not HTML pages)
+- Include up to 6 URLs
+- If you find no valid image URLs, return: []`,
+      }],
+    });
+
+    const formatText = formatResponse.content
+      .filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+    const formatStripped = formatText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+
+    logger.info("backfillSchoolImages: format response", {
+      schoolId,
+      raw: formatStripped.slice(0, 800),
+    });
+
+    // Parse JSON — try multiple strategies
     let photoList = [];
-    try {
-      const first = stripped.indexOf("[");
-      const last = stripped.lastIndexOf("]");
-      if (first !== -1 && last > first) {
-        const parsed = JSON.parse(stripped.slice(first, last + 1));
-        photoList = Array.isArray(parsed) ? parsed : [];
-      }
-    } catch (parseErr) {
-      logger.warn("backfillSchoolImages: JSON parse failed", { error: parseErr.message, raw: stripped.slice(0, 300) });
+
+    // Strategy 1: direct parse
+    try { photoList = JSON.parse(formatStripped); } catch (_) {}
+
+    // Strategy 2: find [ ... ]
+    if (!Array.isArray(photoList) || photoList.length === 0) {
+      try {
+        const first = formatStripped.indexOf("[");
+        const last = formatStripped.lastIndexOf("]");
+        if (first !== -1 && last > first) {
+          photoList = JSON.parse(formatStripped.slice(first, last + 1));
+        }
+      } catch (_) {}
     }
 
-    logger.info("backfillSchoolImages: Claude returned candidates", { count: photoList.length, schoolId });
+    if (!Array.isArray(photoList)) photoList = [];
 
-    // Download each photo and upload to Firebase Storage
+    logger.info("backfillSchoolImages: parsed photo list", {
+      schoolId,
+      count: photoList.length,
+      urls: photoList.map((p) => p.url),
+    });
+
+    // ── Step 3: Download each URL with validation and logging ────────────────
+    const FETCH_HEADERS = {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "image/*, */*",
+    };
+
+    function isValidImageUrl(url) {
+      if (!url || typeof url !== "string") return false;
+      if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
+      if (url.startsWith("data:") || url.startsWith("blob:")) return false;
+      return true;
+    }
+
     const candidates = [];
+    let storageIndex = 0;
+
     for (let i = 0; i < photoList.length; i++) {
       const photo = photoList[i];
-      if (!photo.url || !photo.url.startsWith("http")) continue;
+      if (!isValidImageUrl(photo.url)) {
+        logger.warn("backfillSchoolImages: skipping invalid URL", { schoolId, index: i, url: photo.url });
+        continue;
+      }
+
+      logger.info("backfillSchoolImages: attempting download", { schoolId, index: i, url: photo.url });
       try {
-        const storageUrl = await downloadAndStoreImage(photo.url, `schools/${schoolId}/photos/photo-${i}`);
+        const resp = await fetch(photo.url, { headers: FETCH_HEADERS, redirect: "follow" });
+        logger.info("backfillSchoolImages: download response", {
+          schoolId, index: i, url: photo.url,
+          status: resp.status, contentType: resp.headers.get("content-type"),
+        });
+
+        if (!resp.ok) {
+          logger.warn("backfillSchoolImages: download failed", { schoolId, index: i, url: photo.url, status: resp.status });
+          continue;
+        }
+
+        const contentType = resp.headers.get("content-type") || "";
+        if (!contentType.includes("image") && !contentType.includes("octet-stream")) {
+          logger.warn("backfillSchoolImages: not an image content-type", { schoolId, index: i, url: photo.url, contentType });
+          // Still try to store it — some CDNs serve images with generic content types
+        }
+
+        const imageBuffer = Buffer.from(await resp.arrayBuffer());
+        const ext = contentType.includes("png") ? "png" : "jpg";
+
+        let bucketName;
+        try { bucketName = JSON.parse(process.env.FIREBASE_CONFIG || "{}").storageBucket; } catch {}
+        const bucket = admin.storage().bucket(bucketName);
+        const filePath = `schools/${schoolId}/photos/photo-${storageIndex}.${ext}`;
+        const file = bucket.file(filePath);
+        const downloadToken = crypto.randomUUID();
+        await file.save(imageBuffer, {
+          contentType: contentType || "image/jpeg",
+          metadata: { metadata: { firebaseStorageDownloadTokens: downloadToken } },
+        });
+        const encodedPath = encodeURIComponent(filePath);
+        const storageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
+
         candidates.push({
           url: storageUrl,
           caption: photo.caption || "",
           source: photo.source || "",
           selected: false,
         });
-        logger.info("backfillSchoolImages: stored photo", { schoolId, index: i, storageUrl });
+        storageIndex++;
+        logger.info("backfillSchoolImages: stored photo", { schoolId, storageIndex, filePath });
       } catch (err) {
-        logger.warn("backfillSchoolImages: failed to store photo", { schoolId, index: i, url: photo.url, error: err.message });
+        logger.warn("backfillSchoolImages: error downloading photo", { schoolId, index: i, url: photo.url, error: err.message });
+      }
+    }
+
+    // ── Step 4: og:image fallback if no candidates downloaded ───────────────
+    if (candidates.length === 0) {
+      logger.info("backfillSchoolImages: all downloads failed, trying og:image fallback", { schoolId });
+      try {
+        // Get official website URL from Claude (no web search needed)
+        const siteResponse = await client.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 100,
+          system: "You are a US college database. Return ONLY valid JSON, no markdown.",
+          messages: [{ role: "user", content: `Official website URL for ${schoolName}? Return ONLY: {"url": "https://..."}` }],
+        });
+        const siteText = siteResponse.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+        const siteStripped = siteText.replace(/```json\n?/gi, "").replace(/```\n?/g, "").trim();
+        const siteFirst = siteStripped.indexOf("{");
+        const siteLast = siteStripped.lastIndexOf("}");
+        const websiteUrl = JSON.parse(siteStripped.slice(siteFirst, siteLast + 1)).url;
+
+        if (websiteUrl && websiteUrl.startsWith("http")) {
+          logger.info("backfillSchoolImages: fetching homepage for og:image", { schoolId, websiteUrl });
+          const pageResp = await fetch(websiteUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            },
+            redirect: "follow",
+          });
+
+          if (pageResp.ok) {
+            const html = await pageResp.text();
+            const ogMatch =
+              html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+              html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+              html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
+
+            if (ogMatch && ogMatch[1]) {
+              let imageUrl = ogMatch[1].trim();
+              if (imageUrl.startsWith("//")) imageUrl = "https:" + imageUrl;
+              else if (imageUrl.startsWith("/")) {
+                const base = new URL(websiteUrl);
+                imageUrl = `${base.protocol}//${base.host}${imageUrl}`;
+              }
+
+              logger.info("backfillSchoolImages: found og:image", { schoolId, imageUrl });
+
+              if (isValidImageUrl(imageUrl)) {
+                const storageUrl = await downloadAndStoreImage(imageUrl, `schools/${schoolId}/photos/photo-0`);
+                candidates.push({
+                  url: storageUrl,
+                  caption: `${schoolName} campus`,
+                  source: websiteUrl,
+                  selected: false,
+                });
+                logger.info("backfillSchoolImages: og:image fallback succeeded", { schoolId, storageUrl });
+              }
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        logger.warn("backfillSchoolImages: og:image fallback failed", { schoolId, error: fallbackErr.message });
       }
     }
 
     if (candidates.length === 0) {
-      throw new HttpsError("not-found", `Could not download any photos for ${schoolName}.`);
+      throw new HttpsError("not-found", `Could not download any photos for ${schoolName}. All ${photoList.length} candidate URLs failed.`);
     }
 
     await db.collection("schools").doc(schoolId).update({
