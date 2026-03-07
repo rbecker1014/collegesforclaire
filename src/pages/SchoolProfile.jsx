@@ -1393,7 +1393,7 @@ export default function SchoolProfile() {
       caption: '',
       source: 'URL',
       addedBy: user?.displayName ?? 'Unknown',
-      addedAt: serverTimestamp(),
+      addedAt: new Date().toISOString(),
     };
     await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': arrayUnion(entry) });
   };
@@ -1411,7 +1411,7 @@ export default function SchoolProfile() {
       source: 'Uploaded',
       storagePath: path,
       addedBy: user?.displayName ?? 'Unknown',
-      addedAt: serverTimestamp(),
+      addedAt: new Date().toISOString(),
     };
     await updateDoc(doc(db, 'schools', school.id), { 'images.gallery': arrayUnion(entry) });
   };
